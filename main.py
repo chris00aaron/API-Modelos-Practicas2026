@@ -7,15 +7,13 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from src.retiro_atm.schema.input_retiro_atm import InputDataRetiroAtm
 from src.retiro_atm.schema.output_retiro_atm import OutputDataRetiroAtm
 from src.retiro_atm.service.service_prediction_retiro_atm import ServicioPredicticionRetiroAtm
+from fastapi import FastAPI
 
 # Agregar src al path para importaciones
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src/'))
 
 # Iniciar la aplicación FastAPI
 app = FastAPI()
-
-# Instancia global de los servicios
-servicioPrediccionRetiro = ServicioPredicticionRetiroAtm()
 
 #Codigo base
 @app.post("/predecir/retiro",tags=["Predicción de Temperatura del Estátor"])
@@ -38,5 +36,5 @@ async def health():
 
 #Inicializacion del servidor local
 if __name__ == "__main__":
-    import uvicorn  
+    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
