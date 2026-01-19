@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import joblib
 import os
+import shap
 from datetime import datetime
 from fraude.schema.inputs import FraudInput, FraudOutput, RiskFactor
 
@@ -20,7 +21,8 @@ class FraudService:
             self.xgb_model = model_pack['model_xgb']
             self.if_model = model_pack['model_if']
             self.encoders = model_pack['encoders']
-            print("Modelo de Fraude cargado correctamente.")
+            self.explainer = model_pack.get('explainer')
+            print("Modelo y SHAP Explainer cargados correctamente.")
         except Exception as e:
             print(f"Error cargando el modelo: {e}")
             raise RuntimeError("No se pudo iniciar el servicio de IA de Fraude")
@@ -37,6 +39,9 @@ class FraudService:
             data_dict = input_data.dict()
             df = pd.DataFrame([data_dict])
 
+            # Guardamos una copia de los datos crudos/legibles para la descripción
+            raw_values = df.iloc[0].to_dict()
+
             # 2. Ingeniería de Características (Feature Engineering)
             # Fechas y Edad
             df['trans_date_trans_time'] = pd.to_datetime(df['trans_date_trans_time'])
@@ -46,6 +51,11 @@ class FraudService:
             
             # Distancia
             df['distance_km'] = self._haversine(df['long'], df['lat'], df['merch_long'], df['merch_lat'])
+
+            # Agregamos los calculados a raw_values para mostrarlos si SHAP los elige
+            raw_values['age'] = df['age'].iloc[0]
+            raw_values['hour'] = df['hour'].iloc[0]
+            raw_values['distance_km'] = round(df['distance_km'].iloc[0], 2)
 
             # 3. Codificación (Encoding)
             for col in ['category', 'gender', 'job']:
@@ -76,6 +86,8 @@ class FraudService:
 
             # 6. Isolation Forest (Anomaly Score)
             X['anomaly_score'] = self.if_model.decision_function(X[cols_base])
+            # Guardamos el score calculado en raw_values para que salga en el JSON
+            raw_values['anomaly_score'] = round(X['anomaly_score'].iloc[0], 4)
 
             # Reordenar final
             X_final = X[cols_entrenamiento]
@@ -87,41 +99,79 @@ class FraudService:
             veredicto = "ALTO RIESGO" if probabilidad > 0.5 else "LEGÍTIMO"
             risk_factors = []
             
-            # Factor: Horario
-            if df['hour'].iloc[0] <= 3 or df['hour'].iloc[0] >= 22:
-                risk_factors.append(RiskFactor(
-                    factor="Horario Inusual",
-                    puntos="+35pts",
-                    descripcion=f"Transacción realizada a las {df['hour'].iloc[0]}:00 h (Madrugada/Noche)"
-                ))
-            
-            # Factor: Distancia
-            dist = df['distance_km'].iloc[0]
-            if dist > 100:
-                risk_factors.append(RiskFactor(
-                    factor="Distancia Anómala",
-                    puntos="+30pts",
-                    descripcion=f"Ubicación a {dist:.1f} km del domicilio habitual"
-                ))
-            
-            # Factor: Monto (Umbral ejemplo, idealmente dinámico)
-            if data_dict['amt'] > 1000: # Umbral simple de ejemplo
-                risk_factors.append(RiskFactor(
-                    factor="Monto Elevado",
-                    puntos="+22pts",
-                    descripcion=f"Monto superior al promedio estándar"
-                ))
+            if self.explainer:
+                # Calculamos valores SHAP para esta fila
+                shap_values = self.explainer.shap_values(X_final)
+                
+                # Si es clasificación binaria, shap_values puede ser una lista [array_clase0, array_clase1]
+                # o un solo array si es output margin. XGBoost suele dar directo.
+                # Validamos forma:
+                if isinstance(shap_values, list):
+                    # Tomamos la clase 1 (Fraude)
+                    shap_vals_row = shap_values[1][0] 
+                elif len(shap_values.shape) == 2:
+                    shap_vals_row = shap_values[0]
+                else:
+                    shap_vals_row = shap_values
+
+                feature_names = X_final.columns
+                
+                # Creamos lista de tuplas (feature, shap_value)
+                shap_dict = zip(feature_names, shap_vals_row)
+                
+                # Ordenamos por valor absoluto (magnitud de impacto)
+                # O si prefieres solo mostrar por qué es FRAUDE, ordena descendente (los positivos)
+                top_features = sorted(shap_dict, key=lambda x: x[1], reverse=True)[:5] # Top 5 factores que aumentan el riesgo
+
+                for feat_name, shap_val in top_features:
+                    # Filtramos: Solo nos interesa mostrar al usuario lo que AUMENTA el riesgo (shap > 0)
+                    # o si es legítimo, qué lo hace seguro.
+                    # Aquí asumo que queremos explicar el RIESGO:
+                    
+                    impact = "AUMENTA_RIESGO" if shap_val > 0 else "DISMINUYE_RIESGO"
+                    
+                    # Obtener valor original legible
+                    val_original = raw_values.get(feat_name, "N/A")
+                    
+                    # Generar descripción dinámica
+                    desc = f"El valor de '{feat_name}' ({val_original}) impacta el score en {shap_val:.2f}"
+                    
+                    # Caso especial: Descripciones más bonitas para campos conocidos
+                    if feat_name == 'amt' and shap_val > 0:
+                        desc = f"El monto de {val_original} es inusualmente alto para este perfil."
+                    elif feat_name == 'distance_km' and shap_val > 0:
+                        desc = f"La distancia ({val_original} km) indica una ubicación atípica."
+                    elif feat_name == 'hour' and shap_val > 0:
+                        desc = f"La hora de transacción ({val_original}h) es sospechosa."
+
+                    risk_factors.append(RiskFactor(
+                        feature_name=feat_name,
+                        feature_value=str(val_original),
+                        shap_value=float(shap_val),
+                        risk_description=desc,
+                        impact_direction=impact
+                    ))
+
+            # Si no hay explainer o falló, fallback a lista vacía o regla manual simple
+            if not risk_factors and probabilidad > 0.5:
+                 risk_factors.append(RiskFactor(
+                     feature_name="Modelo General",
+                     feature_value="N/A",
+                     shap_value=probabilidad,
+                     risk_description="Patrón general sospechoso detectado por XGBoost",
+                     impact_direction="AUMENTA_RIESGO"
+                 ))
 
             # Construir Respuesta
             return FraudOutput(
                 transaction_id=input_data.transaction_id,
                 veredicto=veredicto,
-                score_final=f"{probabilidad*100:.1f}%",
+                score_final=float(probabilidad),
                 detalles_riesgo=risk_factors,
                 datos_auditoria={
                     "xgboost_score": float(probabilidad),
                     "iforest_score": float(X['anomaly_score'].iloc[0]),
-                    "detection_scenario": len(risk_factors) + 1
+                    "base_score": float(self.explainer.expected_value) if hasattr(self.explainer, 'expected_value') else 0.0
                 },
                 recomendacion="Bloquear y Notificar" if veredicto == "ALTO RIESGO" else "Aprobar"
             )

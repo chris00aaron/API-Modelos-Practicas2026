@@ -8,3 +8,4 @@ pydantic==2.6.0
 python-multipart
 xgboost
 lightgbm
+shap
