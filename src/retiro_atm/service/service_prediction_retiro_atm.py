@@ -1,3 +1,4 @@
+import os
 from xgboost import XGBRegressor
 from joblib import load
 import numpy
@@ -6,11 +7,12 @@ from src.retiro_atm.schema import OutputDataRetiroAtm
 
 
 class ServicioPredicticionRetiroAtm():
-    __path_model: str = r"src/retiro_atm/models_files/retiro_atm_model.joblib"
     __model : XGBRegressor
 
     def __init__(self):
-        self.__model = load(self.__path_model)
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path_model = os.path.join(base_dir, "models_files", "retiro_atm_model.joblib")
+        self.__model = load(path_model)
     
     def predecir_retiro(self,input:InputDataRetiroAtm) -> OutputDataRetiroAtm:
         x = numpy.array([[

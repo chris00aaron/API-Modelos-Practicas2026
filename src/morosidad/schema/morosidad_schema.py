@@ -76,11 +76,14 @@ class MorosidadResponse(BaseModel):
     """
     default: bool = Field(..., description="¿Habrá incumplimiento de pago?")
     probabilidad_default: float = Field(..., description="Probabilidad de incumplimiento (0.0 - 1.0)")
+    main_risk_factor: str = Field(..., description="Factor de riesgo principal (feature más influyente)")
+    model_version: str = Field(..., description="Versión del modelo utilizado para la predicción")
 
     class Config:
         json_schema_extra = {
             "example": {
                 "default": True,
-                "probabilidad_default": 0.75
+                "probabilidad_default": 0.75,
+                "main_risk_factor": "PAY_0"
             }
         }
