@@ -46,8 +46,8 @@ class FraudService:
             # Fechas y Edad
             df['trans_date_trans_time'] = pd.to_datetime(df['trans_date_trans_time'])
             df['dob'] = pd.to_datetime(df['dob'])
-            df['age'] = (df['trans_date_trans_time'] - df['dob']).dt.days // 365
-            df['hour'] = df['trans_date_trans_time'].dt.hour
+            df['age'] = (df['trans_date_trans_time'] - df['dob']).dt.days // 365 # type: ignore
+            df['hour'] = df['trans_date_trans_time'].dt.hour # type: ignore
             
             # Distancia
             df['distance_km'] = self._haversine(df['long'], df['lat'], df['merch_long'], df['merch_lat'])

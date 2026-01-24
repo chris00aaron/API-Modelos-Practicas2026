@@ -3,13 +3,11 @@ import sys
 import os
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 
+# Herramientas de log y monitoreo
+
 # Agregar src al path para importaciones
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src/'))
 
-#Dependencis Internas
-from src.retiro_atm.schema.input_retiro_atm import InputDataRetiroAtm
-from src.retiro_atm.schema.output_retiro_atm import OutputDataRetiroAtm
-from src.retiro_atm.service.service_prediction_retiro_atm import ServicioPredicticionRetiroAtm
 
 # 2. Importaciones
 try:
@@ -29,25 +27,13 @@ app = FastAPI(
 # Importar Routers
 from src.fraude.router import router as fraud_router
 from src.morosidad.router import router as morosidad_router
+from src.retiro_atm.router import router as retiro_atm_router
 
 # Registrar Routers
 app.include_router(fraud_router)
 app.include_router(morosidad_router)
+app.include_router(retiro_atm_router)
 
-#Instanciamos Servicios
-servicioPrediccionRetiro = ServicioPredicticionRetiroAtm()
-
-#Codigo base
-@app.post("/retiro_atm/predecir",tags=["Predicción del Retiro de Efectivo en ATM"])
-async def predecir_temperatura(input_data: InputDataRetiroAtm ) -> OutputDataRetiroAtm:
-    """
-    Endpoint para predecir el monto ha retirar en un solo dia en un ATM.
-    """
-    try:
-        return servicioPrediccionRetiro.predecir_retiro(input_data)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail="Error interno del servidor")
-    
 #Codigo base
 @app.get("/vivo",tags=["Verificación de la disponibilidad de la api"])
 async def health():
