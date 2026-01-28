@@ -1,9 +1,10 @@
 # src/morosidad/service/morosidad_service.py
 import pandas as pd
 import numpy as np
+from typing import List
 
 from morosidad.models_files import obtener_modelo, obtener_explainer, obtener_version
-from morosidad.schema import MorosidadRequest, MorosidadResponse
+from morosidad.schema import MorosidadRequest, MorosidadResponse, BatchMorosidadRequest, BatchItemResponse, BatchMorosidadResponse
 
 
 # Orden exacto de las columnas que espera el modelo
@@ -82,5 +83,55 @@ def predecir_morosidad(request: MorosidadRequest) -> MorosidadResponse:
         probabilidad_default=probabilidad_default,
         main_risk_factor=main_risk_factor,
         model_version=obtener_version()
+    )
+
+
+def predecir_morosidad_batch(requests: List[MorosidadRequest]) -> BatchMorosidadResponse:
+    """
+    Realiza predicción de morosidad en lote (vectorizado).
+    Mucho más eficiente que llamar a predecir_morosidad individualmente.
+    
+    Args:
+        requests: Lista de datos de entrada.
+    
+    Returns:
+        BatchMorosidadResponse con todas las predicciones.
+    """
+    if not requests:
+        return BatchMorosidadResponse(
+            predictions=[],
+            model_version=obtener_version(),
+            total_processed=0
+        )
+    
+    # Obtener el modelo
+    modelo = obtener_modelo()
+    
+    # Crear DataFrame con TODAS las filas de una vez (vectorización)
+    datos = [req.model_dump() for req in requests]
+    df = pd.DataFrame(datos, columns=COLUMNAS_MODELO)
+    
+    # Asegurar tipos numéricos
+    for col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # Predicción vectorizada (muy rápida)
+    predicciones = modelo.predict(df)
+    probabilidades = modelo.predict_proba(df)[:, 1]  # Probabilidad de clase 1
+    
+    # Construir respuestas
+    results = []
+    for i in range(len(requests)):
+        results.append(BatchItemResponse(
+            index=i,
+            default=bool(predicciones[i] == 1),
+            probabilidad_default=float(probabilidades[i]),
+            main_risk_factor="Batch"  # Simplificado para velocidad
+        ))
+    
+    return BatchMorosidadResponse(
+        predictions=results,
+        model_version=obtener_version(),
+        total_processed=len(requests)
     )
 

@@ -1,4 +1,5 @@
 # src/morosidad/schema/morosidad_schema.py
+from typing import List
 from pydantic import BaseModel, Field
 
 
@@ -87,3 +88,25 @@ class MorosidadResponse(BaseModel):
                 "main_risk_factor": "PAY_0"
             }
         }
+
+
+# ==================== BATCH SCHEMAS ====================
+
+class BatchMorosidadRequest(BaseModel):
+    """Schema de entrada para predicción en lote."""
+    items: List[MorosidadRequest] = Field(..., description="Lista de clientes para predecir")
+
+
+class BatchItemResponse(BaseModel):
+    """Respuesta individual dentro del batch."""
+    index: int = Field(..., description="Índice original para mantener orden")
+    default: bool = Field(..., description="¿Habrá incumplimiento de pago?")
+    probabilidad_default: float = Field(..., description="Probabilidad de incumplimiento (0.0 - 1.0)")
+    main_risk_factor: str = Field(..., description="Factor de riesgo principal")
+
+
+class BatchMorosidadResponse(BaseModel):
+    """Schema de salida para predicción en lote."""
+    predictions: List[BatchItemResponse] = Field(..., description="Lista de predicciones")
+    model_version: str = Field(..., description="Versión del modelo utilizado")
+    total_processed: int = Field(..., description="Total de registros procesados")

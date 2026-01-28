@@ -1,4 +1,16 @@
 # src/morosidad/schema/__init__.py
-from .morosidad_schema import MorosidadRequest, MorosidadResponse
+from .morosidad_schema import (
+    MorosidadRequest, 
+    MorosidadResponse,
+    BatchMorosidadRequest,
+    BatchItemResponse,
+    BatchMorosidadResponse
+)
 
-__all__ = ["MorosidadRequest", "MorosidadResponse"]
+__all__ = [
+    "MorosidadRequest", 
+    "MorosidadResponse",
+    "BatchMorosidadRequest",
+    "BatchItemResponse",
+    "BatchMorosidadResponse"
+]
