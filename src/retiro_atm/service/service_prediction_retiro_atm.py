@@ -16,21 +16,15 @@ class ServicioPredicticionRetiroAtm():
     
     def predecir_retiro(self,input:InputDataRetiroAtm) -> OutputDataRetiroAtm:
         x = numpy.array([[
-            input.dia_semana,
-            input.quincena,
-            input.semana_mes,
-            input.dia_mes,
+            input.diaSemana,
+            input.tendencia_lags,
             input.lag1,
             input.lag5,
-            input.lag7,
             input.lag11,
-            input.tendencia_lags,
-            input.esFeriado,
             input.caida_reciente,
-            input.volatilidad_reciente,
-            input.media_movil_3d,
             input.retiros_finde_anterior,
-            input.lunes_post_finde_bajo,
+            input.retiros_domingo_anterior,
+            input.ratio_finde_vs_semana,
             input.domingo_bajo,
             input.ubicacion,  
             input.ambiente
