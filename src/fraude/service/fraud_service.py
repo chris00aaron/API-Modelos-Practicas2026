@@ -4,7 +4,7 @@ import joblib
 import os
 import shap
 from datetime import datetime
-from fraude.schema.inputs import FraudInput, FraudOutput, RiskFactor
+from fraude.schema.inputs import FraudInput, FraudOutput, RiskFactor, BatchFraudInput, BatchFraudOutput
 
 class FraudService:
     def __init__(self):
@@ -32,6 +32,48 @@ class FraudService:
         lon1, lat1, lon2, lat2 = map(np.radians, [lon1, lat1, lon2, lat2])
         d = 2 * 6371 * np.arcsin(np.sqrt(np.sin((lat2-lat1)/2)**2 + np.cos(lat1)*np.cos(lat2)*np.sin((lon2-lon1)/2)**2))
         return d
+
+    def predict_batch(self, batch_input: BatchFraudInput) -> BatchFraudOutput:
+        """
+        Procesa múltiples transacciones en un solo lote.
+        Más eficiente que llamar predict() múltiples veces.
+        """
+        results = []
+        total_frauds = 0
+        total_legitimate = 0
+        total_errors = 0
+        
+        for input_data in batch_input.transactions:
+            try:
+                result = self.predict(input_data)
+                results.append(result)
+                
+                if result.veredicto == "ALTO RIESGO":
+                    total_frauds += 1
+                else:
+                    total_legitimate += 1
+                    
+            except Exception as e:
+                # Si falla una transacción, registrar el error pero continuar con las demás
+                error_result = FraudOutput(
+                    transaction_id=input_data.transaction_id,
+                    veredicto="ERROR",
+                    score_final=0.0,
+                    detalles_riesgo=[],
+                    datos_auditoria={},
+                    recomendacion="Revisar manualmente",
+                    error=str(e)
+                )
+                results.append(error_result)
+                total_errors += 1
+        
+        return BatchFraudOutput(
+            total_processed=len(results),
+            total_frauds=total_frauds,
+            total_legitimate=total_legitimate,
+            total_errors=total_errors,
+            results=results
+        )
 
     def predict(self, input_data: FraudInput) -> FraudOutput:
         try:
