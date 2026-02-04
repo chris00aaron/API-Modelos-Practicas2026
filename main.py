@@ -9,6 +9,11 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src/'))
 
 
+from src.infraestructure.configuration.logging_config import setup_logging
+
+#Iniciamos el loggin
+setup_logging()
+
 # 2. Importaciones
 try:
     from fuga.schema.inputs import ChurnInput

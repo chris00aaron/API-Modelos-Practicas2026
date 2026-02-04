@@ -2,6 +2,7 @@
 from .morosidad_schema import (
     MorosidadRequest, 
     MorosidadResponse,
+    RiskFactor,
     BatchMorosidadRequest,
     BatchItemResponse,
     BatchMorosidadResponse
@@ -10,7 +11,9 @@ from .morosidad_schema import (
 __all__ = [
     "MorosidadRequest", 
     "MorosidadResponse",
+    "RiskFactor",
     "BatchMorosidadRequest",
     "BatchItemResponse",
     "BatchMorosidadResponse"
 ]
+

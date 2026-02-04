@@ -1,5 +1,5 @@
 # src/morosidad/schema/morosidad_schema.py
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -71,6 +71,13 @@ class MorosidadRequest(BaseModel):
         }
 
 
+class RiskFactor(BaseModel):
+    """Factor de riesgo individual con su impacto SHAP."""
+    name: str = Field(..., description="Nombre de la variable")
+    impact: float = Field(..., description="Impacto normalizado (-100 a +100)")
+    direction: str = Field(..., description="positive = aumenta riesgo, negative = reduce riesgo")
+
+
 class MorosidadResponse(BaseModel):
     """
     Schema de salida para predicción de morosidad.
@@ -78,6 +85,7 @@ class MorosidadResponse(BaseModel):
     default: bool = Field(..., description="¿Habrá incumplimiento de pago?")
     probabilidad_default: float = Field(..., description="Probabilidad de incumplimiento (0.0 - 1.0)")
     main_risk_factor: str = Field(..., description="Factor de riesgo principal (feature más influyente)")
+    risk_factors: List[RiskFactor] = Field(default=[], description="Top 5 factores de riesgo con impacto")
     model_version: str = Field(..., description="Versión del modelo utilizado para la predicción")
 
     class Config:
@@ -85,7 +93,12 @@ class MorosidadResponse(BaseModel):
             "example": {
                 "default": True,
                 "probabilidad_default": 0.75,
-                "main_risk_factor": "PAY_0"
+                "main_risk_factor": "PAY_0",
+                "risk_factors": [
+                    {"name": "PAY_0", "impact": 45.2, "direction": "positive"},
+                    {"name": "UTILIZATION_RATE", "impact": 28.1, "direction": "positive"},
+                    {"name": "AGE", "impact": -15.3, "direction": "negative"}
+                ]
             }
         }
 
@@ -95,6 +108,7 @@ class MorosidadResponse(BaseModel):
 class BatchMorosidadRequest(BaseModel):
     """Schema de entrada para predicción en lote."""
     items: List[MorosidadRequest] = Field(..., description="Lista de clientes para predecir")
+    include_shap: bool = Field(default=False, description="¿Incluir análisis SHAP agregado?")
 
 
 class BatchItemResponse(BaseModel):
@@ -108,5 +122,6 @@ class BatchItemResponse(BaseModel):
 class BatchMorosidadResponse(BaseModel):
     """Schema de salida para predicción en lote."""
     predictions: List[BatchItemResponse] = Field(..., description="Lista de predicciones")
+    shap_summary: Optional[List[RiskFactor]] = Field(default=None, description="Resumen agregado de factores SHAP (si se solicitó)")
     model_version: str = Field(..., description="Versión del modelo utilizado")
     total_processed: int = Field(..., description="Total de registros procesados")

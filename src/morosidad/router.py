@@ -47,7 +47,7 @@ def predict_batch(request: BatchMorosidadRequest) -> BatchMorosidadResponse:
     - **predictions**: Lista de predicciones con índice para mantener orden
     """
     try:
-        return predecir_morosidad_batch(request.items)
+        return predecir_morosidad_batch(request)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
