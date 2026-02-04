@@ -8,6 +8,10 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 # Agregar src al path para importaciones
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src/'))
 
+from src.configuration.logging_config import setup_logging
+
+#Iniciamos el loggin
+setup_logging()
 
 # 2. Importaciones
 try:
@@ -54,4 +58,4 @@ def predict_churn(data: ChurnInput):
 #Inicializacion del servidor local
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

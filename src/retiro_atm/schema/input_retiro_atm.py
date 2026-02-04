@@ -1,6 +1,12 @@
 from pydantic import BaseModel, Field
 
 class InputDataRetiroAtm(BaseModel):
+    atm: int = Field(
+        ...,
+        examples=[1],
+        description="Id del Atm",
+        ge=1
+    )
     diaSemana: int = Field(
         ...,
         examples=[3],
@@ -11,8 +17,7 @@ class InputDataRetiroAtm(BaseModel):
     tendencia_lags: float = Field(
         ...,
         examples=[4133.0],
-        description="Tendencia general estimada a partir de lags previos",
-        ge=0
+        description="Tendencia general estimada a partir de lags previos"
     )
     lag1: float = Field(
         ...,
