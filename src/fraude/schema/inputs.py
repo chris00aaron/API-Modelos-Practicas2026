@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 # --- MODELO DE ENTRADA (Request) ---
 class FraudInput(BaseModel):
@@ -32,3 +32,17 @@ class FraudOutput(BaseModel):
     detalles_riesgo: List[RiskFactor]
     datos_auditoria: Dict[str, Any]
     recomendacion: str
+    error: Optional[str] = None  # Para errores individuales en batch
+
+# --- MODELOS PARA BATCH (Lote) ---
+class BatchFraudInput(BaseModel):
+    """Request para predicciones en lote"""
+    transactions: List[FraudInput] = Field(..., description="Lista de transacciones a procesar")
+
+class BatchFraudOutput(BaseModel):
+    """Response de predicciones en lote"""
+    total_processed: int
+    total_frauds: int
+    total_legitimate: int
+    total_errors: int
+    results: List[FraudOutput]
