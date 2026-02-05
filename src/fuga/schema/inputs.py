@@ -11,6 +11,9 @@ class ChurnInput(BaseModel):
     HasCrCard: int = Field(..., description="Tiene tarjeta (1=Sí, 0=No)", example=1)
     IsActiveMember: int = Field(..., description="Es activo (1=Sí, 0=No)", example=1)
     EstimatedSalary: float = Field(..., description="Salario estimado", example=50000.0)
+    
+    # Campo opcional para validación (Ground Truth)
+    Exited: int | None = Field(default=None, description="Si el cliente realmente fugó (1=Sí, 0=No)")
 
     class Config:
         json_schema_extra = {
