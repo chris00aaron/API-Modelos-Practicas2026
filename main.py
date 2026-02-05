@@ -13,11 +13,6 @@ from src.configuration.logging_config import setup_logging
 #Iniciamos el loggin
 setup_logging()
 
-from src.infraestructure.configuration.logging_config import setup_logging
-
-#Iniciamos el loggin
-setup_logging()
-
 # 2. Importaciones
 try:
     from fuga.schema.inputs import ChurnInput
