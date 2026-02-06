@@ -38,11 +38,11 @@ class ChurnService:
         # ---------------------------------------------------------
         # A. INGENIERÍA DE CARACTERÍSTICAS (Tus fórmulas matemáticas)
         # ---------------------------------------------------------
-        # Evitamos división por cero sumando un epsilon si es necesario, 
-        # o asumimos que Age nunca es 0.
-        df['TenureByAge'] = df['Tenure'] / df['Age']
-        df['BalanceSalaryRatio'] = df['Balance'] / df['EstimatedSalary']
-        df['CreditScoreGivenAge'] = df['CreditScore'] / df['Age']
+        # Evitamos división por cero usando un valor pequeño (epsilon) o validación
+        epsilon = 1e-9
+        df['TenureByAge'] = df['Tenure'] / (df['Age'] + epsilon)
+        df['BalanceSalaryRatio'] = df['Balance'] / (df['EstimatedSalary'] + epsilon)
+        df['CreditScoreGivenAge'] = df['CreditScore'] / (df['Age'] + epsilon)
 
         # ---------------------------------------------------------
         # B. CODIFICACIÓN (Encoding)
@@ -96,16 +96,116 @@ class ChurnService:
             result = int(prediction[0]) 
             prob_churn = float(probability[0][1])
             
+            # Calcular nivel de riesgo y confianza
+            risk_level = "Bajo"
+            if prob_churn > 0.75:
+                risk_level = "Alto"
+            elif prob_churn > 0.45:
+                risk_level = "Medio" # Ajustado para coincidir mejor con dashboard
+            
+            # Confianza simple: qué tan lejos está del umbral 0.5
+            confidence = abs(prob_churn - 0.5) * 2 
+
+            # Generar Explicaciones (XAI Lite)
+            risk_factors = self.generate_explanations(input_data, prob_churn)
+            
+            # Recuperar Ground Truth si existe
+            real_exit = input_data.get('Exited')
+            is_real_exit = True if real_exit == 1 else False if real_exit == 0 else None
+
             return {
                 "prediction": "Abandona (Churn)" if result == 1 else "Se Queda",
                 "churn_probability": round(prob_churn, 4),
-                "risk_level": "Alto" if prob_churn > 0.45 else "Bajo", # Usando tu umbral de 0.45
-                "is_churn": result
+                "risk_level": risk_level,
+                "is_churn": result,
+                "prediction_confidence": round(confidence, 4),
+                "model_version": "v1.0.0",
+                "risk_factors": risk_factors,
+                "real_exit": is_real_exit # Devolvemos la realidad para validación
             }
             
         except Exception as e:
             import traceback
             traceback.print_exc() # Esto te imprimirá el error exacto en la terminal
             return {"error": str(e)}
+
+    def generate_explanations(self, data: dict, probability: float):
+        """
+        Genera factores de riesgo basados en la lógica del negocio y el modelo.
+        Retorna una lista de objetos {feature, impact, type}.
+        """
+        factors = []
+
+        # 1. Edad (Suele ser factor de riesgo si es mayor de 40)
+        age = data.get('Age', 0)
+        if age > 45:
+            factors.append({
+                "feature": f"Edad Avanzada ({age})",
+                "impact": 30, 
+                "type": "negative" # Negative para el cliente = Aumenta Riesgo de Fuga
+            })
+        elif age < 30:
+            factors.append({
+                "feature": "Edad Joven",
+                "impact": -15, 
+                "type": "positive" # Positive = Ayuda a retener
+            })
+
+        # 2. Miembro Activo
+        active = data.get('IsActiveMember', 0)
+        if active == 1:
+            factors.append({
+                "feature": "Cliente Activo",
+                "impact": -25,
+                "type": "positive"
+            })
+        else:
+            factors.append({
+                "feature": "Inactividad",
+                "impact": 20,
+                "type": "negative"
+            })
+
+        # 3. Balance
+        balance = data.get('Balance', 0)
+        if balance > 100000:
+             factors.append({
+                "feature": "Balance Alto",
+                "impact": 15, # A veces saldos altos son más volátiles
+                "type": "negative"
+            })
+        elif balance == 0:
+             factors.append({
+                "feature": "Saldo Cero",
+                "impact": 10,
+                "type": "negative"
+            })
+
+        # 4. Productos
+        products = data.get('NumOfProducts', 1)
+        if products >= 3:
+            factors.append({
+                "feature": "Exceso Productos",
+                "impact": 40, # 3 o 4 productos suelen tener mucha fuga
+                "type": "negative"
+            })
+        elif products == 2:
+            factors.append({
+                "feature": "Vinculación Óptima",
+                "impact": -20,
+                "type": "positive"
+            })
+
+        # 5. Score Crediticio
+        score = data.get('CreditScore', 600)
+        if score < 450:
+            factors.append({
+                "feature": "Score Crediticio Bajo",
+                "impact": 35,
+                "type": "negative"
+            })
+
+        # Ordenar por impacto absoluto y devolver top 5
+        return sorted(factors, key=lambda x: abs(x['impact']), reverse=True)[:5]
 
 churn_service = ChurnService()

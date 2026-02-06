@@ -32,11 +32,13 @@ app = FastAPI(
 from src.fraude.router import router as fraud_router
 from src.morosidad.router import router as morosidad_router
 from src.retiro_atm.router import router as retiro_atm_router
+from src.fuga.router import router as fuga_router
 
 # Registrar Routers
 app.include_router(fraud_router)
 app.include_router(morosidad_router)
 app.include_router(retiro_atm_router)
+app.include_router(fuga_router)
 
 # Precargar modelos al iniciar la API
 @app.on_event("startup")
@@ -57,15 +59,6 @@ async def health():
     Endpoint para verificar si esta funcionando la API
     """
     return {"mensaje": "ESTOY VIVO."}
-
-@app.post("/fuga/predecir")
-def predict_churn(data: ChurnInput):
-    input_data = data.model_dump()
-    result = churn_service.predict(input_data)
-    
-    if "error" in result:
-        raise HTTPException(status_code=500, detail=result["error"])
-    return result
 
 #Inicializacion del servidor local
 if __name__ == "__main__":
