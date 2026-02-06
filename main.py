@@ -13,11 +13,6 @@ from src.configuration.logging_config import setup_logging
 #Iniciamos el loggin
 setup_logging()
 
-from src.infraestructure.configuration.logging_config import setup_logging
-
-#Iniciamos el loggin
-setup_logging()
-
 # 2. Importaciones
 try:
     from fuga.schema.inputs import ChurnInput
@@ -42,6 +37,18 @@ from src.retiro_atm.router import router as retiro_atm_router
 app.include_router(fraud_router)
 app.include_router(morosidad_router)
 app.include_router(retiro_atm_router)
+
+# Precargar modelos al iniciar la API
+@app.on_event("startup")
+async def startup_event():
+    """Precarga los modelos al iniciar la API para ver logs de conexión."""
+    print("[STARTUP] Precargando modelo de morosidad...")
+    try:
+        from src.morosidad.models_files import cargar_modelo
+        cargar_modelo()
+        print("[STARTUP] Modelo de morosidad precargado correctamente")
+    except Exception as e:
+        print(f"[STARTUP] Error precargando modelo de morosidad: {e}")
 
 #Codigo base
 @app.get("/vivo",tags=["Verificación de la disponibilidad de la api"])

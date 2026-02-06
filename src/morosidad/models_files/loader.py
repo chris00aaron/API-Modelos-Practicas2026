@@ -1,9 +1,17 @@
+
+import logging
+
+logger = logging.getLogger(__name__)
+
 # src/morosidad/models_files/loader.py
 import os
 import joblib
 
 import dagshub
 import mlflow
+
+import requests
+import tempfile
 
 # Configuración DagsHub
 DAGSHUB_REPO_OWNER = "notificacionesbankmind"
@@ -15,8 +23,9 @@ DAGSHUB_MODEL_PATH = "modelos/morosidad/modelo.pkl"
 DAGSHUB_TOKEN = "1022993058d503226b5e83a649a067c0c2ef2e73"  # <-- PEGA TU TOKEN AQUÍ
 
 # Configurar token en variables de entorno automáticamente
-if DAGSHUB_TOKEN and DAGSHUB_TOKEN != "1022993058d503226b5e83a649a067c0c2ef2e73":
+if DAGSHUB_TOKEN:
     os.environ["DAGSHUB_USER_TOKEN"] = DAGSHUB_TOKEN
+    print(f"[SETUP] Token DagsHub configurado desde código (len={len(DAGSHUB_TOKEN)})")
 
 # Ruta al archivo del modelo (fallback local)
 _MODELO_PATH = os.path.join(os.path.dirname(__file__), "model.pkl")
@@ -32,12 +41,12 @@ def _verificar_token():
     """Verifica si hay token de DagsHub configurado."""
     token = os.environ.get("DAGSHUB_TOKEN") or os.environ.get("DAGSHUB_USER_TOKEN")
     if token:
-        print(f"[DEBUG] Token DagsHub encontrado (longitud: {len(token)} chars)")
+        logger.debug(f"Token DagsHub encontrado (longitud: {len(token)} chars)")
         return True
     else:
-        print("[WARN] No se encontró DAGSHUB_TOKEN en variables de entorno")
-        print("[INFO] Para configurar el token, ejecuta:")
-        print("       set DAGSHUB_TOKEN=tu_token_aqui")
+        logger.warning("No se encontró DAGSHUB_TOKEN en variables de entorno")
+        logger.info("Para configurar el token, ejecuta:")
+        logger.info("       set DAGSHUB_TOKEN=tu_token_aqui")
         print("       O usa: dagshub login")
         return False
 
@@ -46,7 +55,7 @@ def _init_dagshub():
     """Inicializa la conexión a DagsHub/MLflow."""
     global _dagshub_initialized
     if not _dagshub_initialized:
-        print(f"[DEBUG] Intentando conectar a DagsHub: {DAGSHUB_REPO_OWNER}/{DAGSHUB_REPO_NAME}")
+        logger.debug(f"Intentando conectar a DagsHub: {DAGSHUB_REPO_OWNER}/{DAGSHUB_REPO_NAME}")
         _verificar_token()
         
         try:
@@ -56,15 +65,19 @@ def _init_dagshub():
                 mlflow=True
             )
             _dagshub_initialized = True
-            print(f"[OK] Conectado a DagsHub: {DAGSHUB_REPO_OWNER}/{DAGSHUB_REPO_NAME}")
-            print(f"[DEBUG] MLflow Tracking URI: {mlflow.get_tracking_uri()}")
+            logger.info(f"Conectado a DagsHub: {DAGSHUB_REPO_OWNER}/{DAGSHUB_REPO_NAME}")
+            logger.debug(f"MLflow Tracking URI: {mlflow.get_tracking_uri()}")
         except Exception as e:
-            print(f"[ERROR] Error conectando a DagsHub: {type(e).__name__}: {e}")
+            logger.error(f"Error conectando a DagsHub: {type(e).__name__}: {e}")
+
+
+
 
 
 def _descargar_modelo_dagshub():
     """
-    Descarga el modelo desde el repositorio DagsHub.
+    Descarga el modelo desde DagsHub (raw) intentando varias ramas.
+    Guarda el archivo descargado localmente (_MODELO_PATH) para caché.
     
     Returns:
         El contenido del archivo .pkl cargado, o None si falla.
@@ -72,17 +85,32 @@ def _descargar_modelo_dagshub():
     try:
         _init_dagshub()
         
-        # Construir URI del artifact
-        artifact_uri = f"mlflow-artifacts:/{DAGSHUB_MODEL_PATH}"
+        auth = (DAGSHUB_TOKEN, "") if DAGSHUB_TOKEN else None
+        branches = ["main", "master"]
         
-        # Descargar a directorio temporal
-        local_path = mlflow.artifacts.download_artifacts(artifact_uri)
-        
-        print(f"[OK] Modelo descargado desde DagsHub: {DAGSHUB_MODEL_PATH}")
-        return joblib.load(local_path)
+        for branch in branches:
+            raw_url = f"https://dagshub.com/{DAGSHUB_REPO_OWNER}/{DAGSHUB_REPO_NAME}/raw/{branch}/{DAGSHUB_MODEL_PATH}"
+            logger.info(f"Intentando descargar modelo desde: {raw_url}")
+            
+            try:
+                response = requests.get(raw_url, auth=auth)
+                if response.status_code == 200:
+                    # Guardar en archivo local (caché persistente)
+                    with open(_MODELO_PATH, "wb") as f:
+                        f.write(response.content)
+                    
+                    logger.info(f"Modelo descargado y actualizado en: {_MODELO_PATH}")
+                    return joblib.load(_MODELO_PATH)
+                else:
+                    logger.warning(f"Rama '{branch}' falló o no existe el archivo (Status: {response.status_code})")
+            except Exception as e_req:
+                logger.warning(f"Error conectando a rama '{branch}': {e_req}")
+
+        logger.error("No se pudo descargar el modelo de ninguna rama.")
+        return None
         
     except Exception as e:
-        print(f"[WARN] No se pudo descargar desde DagsHub: {e}")
+        logger.warning(f"Error general en descarga DagsHub: {e}")
         return None
 
 
@@ -102,15 +130,20 @@ def cargar_modelo():
         return _modelo, _explainer
     
     # Primero: intentar descargar desde DagsHub
+    # Esto actualizará el archivo local (_MODELO_PATH) si tiene éxito
     model_pack = _descargar_modelo_dagshub()
     
-    # Fallback: cargar desde archivo local
+    # Fallback: Usar archivo local si la descarga falló
     if model_pack is None and os.path.exists(_MODELO_PATH):
-        print("[INFO] Usando modelo local como fallback")
-        model_pack = joblib.load(_MODELO_PATH)
+        logger.warning("Falló la descarga -> Usando modelo local (Offline Mode)")
+        try:
+            model_pack = joblib.load(_MODELO_PATH)
+        except Exception as e:
+            logger.error(f"Error cargando fallback local: {e}")
+            model_pack = None
     
     if model_pack is None:
-        print("[ERROR] No se pudo cargar el modelo desde ninguna fuente")
+        logger.error("No se pudo cargar el modelo desde ninguna fuente (ni DagsHub ni local)")
         return None, None
     
     # Extraer componentes del paquete
@@ -124,17 +157,17 @@ def cargar_modelo():
         if isinstance(meta, dict):
             _version = meta.get('version', "v1.0")
         
-        print(f"[OK] Modelo de morosidad cargado. Versión: {_version}")
+        logger.info(f"Modelo de morosidad cargado. Versión: {_version}")
         
         if _explainer:
-            print("[OK] SHAP Explainer cargado correctamente.")
+            logger.info("SHAP Explainer cargado correctamente.")
         else:
-            print("[WARN] No se encontró 'shap_explainer' en el archivo .pkl")
+            logger.warning("No se encontró 'shap_explainer' en el archivo .pkl")
     else:
         # Retrocompatibilidad: si es el modelo directamente
         _modelo = model_pack
-        print("[OK] Modelo de morosidad cargado (formato legacy)")
-        print("[WARN] El archivo no contiene explainer SHAP ni metadatos")
+        logger.info("Modelo de morosidad cargado (formato legacy)")
+        logger.warning("El archivo no contiene explainer SHAP ni metadatos")
     
     return _modelo, _explainer
 
