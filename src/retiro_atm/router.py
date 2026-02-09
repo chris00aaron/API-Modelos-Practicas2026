@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from retiro_atm.schema.input_retiro_atm import InputDataRetiroAtm
 from retiro_atm.schema.output_retiro_atm import OutputDataRetiroAtm
-from retiro_atm.service.service_prediction_retiro_atm import ServicioPredicticionRetiroAtm
+from retiro_atm.service.service_prediction_retiro_atm import ServicioPrediccionRetiroAtm
 import sys
 
 router = APIRouter(
@@ -12,7 +12,7 @@ router = APIRouter(
 
 # Instanciamos el servicio una única vez al cargar el módulo
 try:
-    servicioPrediccionRetiro = ServicioPredicticionRetiroAtm()
+    servicioPrediccionRetiro = ServicioPrediccionRetiroAtm()
 except Exception as e:
     print(f"CRITICAL ERROR: No se pudo inicializar el servicio de predicción de retiros: {e}")
     sys.exit(1)

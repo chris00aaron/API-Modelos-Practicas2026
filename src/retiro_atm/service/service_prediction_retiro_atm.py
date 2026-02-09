@@ -1,81 +1,45 @@
-import os
-from xgboost import XGBRegressor
-from joblib import load
-import numpy
+import numpy as np
 import logging
-from src.retiro_atm.schema import InputDataRetiroAtm
-from src.retiro_atm.schema import OutputDataRetiroAtm
+from .atm_model_provider import AtmModelProvider, ModeloActualizandoseError
+from src.retiro_atm.schema import InputDataRetiroAtm, OutputDataRetiroAtm
 
 logger = logging.getLogger(__name__)
 
-class ServicioPredicticionRetiroAtm():
-    __model : XGBRegressor
-
+class ServicioPrediccionRetiroAtm:
     def __init__(self):
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        path_model = os.path.join(base_dir, "models_files", "retiro_atm_model.joblib")
-        self.__model = load(path_model)
-    
-    def predecir_retiro(self,input:InputDataRetiroAtm) -> OutputDataRetiroAtm:
-        x = numpy.array([[
-            input.diaSemana,
-            input.tendencia_lags,
-            input.lag1,
-            input.lag5,
-            input.lag11,
-            input.caida_reciente,
-            input.retiros_finde_anterior,
-            input.retiros_domingo_anterior,
-            input.ratio_finde_vs_semana,
-            input.domingo_bajo,
-            input.ubicacion,  
-            input.ambiente
-        ]])
+        self.provider = AtmModelProvider()
 
-        #Obtenemosla predicción del modelo 
-        y_pred_log = self.__model.predict(x)
-        y_pred_final = numpy.expm1(y_pred_log) # Volver a la escala de pesos/dólares
+    def predecir_retiro(self, input_data: InputDataRetiroAtm) -> OutputDataRetiroAtm:
+        """Realiza una predicción individual consumiendo el modelo en RAM."""
+        # El provider decide si entrega el modelo o lanza la excepción de 'actualizando'
+        modelo = self.provider.obtener_modelo()
         
-        #Casteamos el valor deseado a predecir
-        prediccion_retiro = float(y_pred_final[0])
+        x = self._build_features(input_data)
+        y_pred_log = modelo.predict(x)
+        prediccion_final = float(np.expm1(y_pred_log)[0])
 
-        return OutputDataRetiroAtm( atm=input.atm, retiro=prediccion_retiro)
-    
-    
-    def predecir_retiro_lote(
-        self, 
-        inputs: list[InputDataRetiroAtm]
-    ) -> list[OutputDataRetiroAtm]:
-        logger.info("Se inicializo una consulta en lote de prediccion de retio en atm")
+        return OutputDataRetiroAtm(atm=input_data.atm, retiro=prediccion_final)
 
-        X = numpy.vstack([self._build_features(inp) for inp in inputs])
+    def predecir_retiro_lote(self, inputs: list[InputDataRetiroAtm]) -> list[OutputDataRetiroAtm]:
+        """Realiza predicciones en lote de forma eficiente."""
+        modelo = self.provider.obtener_modelo()
+        logger.info(f"Procesando lote de {len(inputs)} registros.")
 
-        y_pred_log = self.__model.predict(X)
-        y_pred_final = numpy.expm1(y_pred_log)
+        # Optimizamos la creación de la matriz
+        X = np.array([self._build_features(inp).ravel() for inp in inputs])
 
-        logger.info("Se concluyo exitosamente la prediccion de retio en atm")    
+        y_pred_log = modelo.predict(X)
+        y_pred_final = np.expm1(y_pred_log)
 
         return [
-            OutputDataRetiroAtm(
-                atm=inputs[i].atm,
-                retiro=float(y_pred_final[i])
-            )
+            OutputDataRetiroAtm(atm=inputs[i].atm, retiro=float(y_pred_final[i]))
             for i in range(len(inputs))
         ]
-    
-    #Método interno que prepara el vector
-    def _build_features(self, input: InputDataRetiroAtm) -> numpy.ndarray:
-        return numpy.array([[ 
-            input.diaSemana,
-            input.tendencia_lags,
-            input.lag1,
-            input.lag5,
-            input.lag11,
-            input.caida_reciente,
-            input.retiros_finde_anterior,
-            input.retiros_domingo_anterior,
-            input.ratio_finde_vs_semana,
-            input.domingo_bajo,
-            input.ubicacion,
-            input.ambiente
+
+    def _build_features(self, data: InputDataRetiroAtm) -> np.ndarray:
+        return np.array([[ 
+            data.diaSemana, data.tendencia_lags, data.lag1, data.lag5,
+            data.lag11, data.caida_reciente, data.retiros_finde_anterior,
+            data.retiros_domingo_anterior, data.ratio_finde_vs_semana,
+            data.domingo_bajo, data.ubicacion, data.ambiente
         ]])
