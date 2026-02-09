@@ -1,34 +1,34 @@
 
 import logging
-
-logger = logging.getLogger(__name__)
-
-# src/morosidad/models_files/loader.py
 import os
+import io
 import joblib
 
 import dagshub
 import mlflow
-
 import requests
-import tempfile
+
+from dotenv import load_dotenv
+
+# Cargar variables de entorno desde .env
+load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 # Configuración DagsHub
 DAGSHUB_REPO_OWNER = "notificacionesbankmind"
 DAGSHUB_REPO_NAME = "Modelos_BankMind_2026"
 DAGSHUB_MODEL_PATH = "modelos/morosidad/modelo.pkl"
 
-# Token de DagsHub (⚠️ REEMPLAZAR con tu token real)
-# Obtén tu token en: https://dagshub.com/user/settings/tokens
-DAGSHUB_TOKEN = "1022993058d503226b5e83a649a067c0c2ef2e73"  # <-- PEGA TU TOKEN AQUÍ
+# Token de DagsHub (desde variable de entorno)
+DAGSHUB_TOKEN = os.environ.get("DAGSHUB_USER_TOKEN")
 
-# Configurar token en variables de entorno automáticamente
+# Configurar token en variables de entorno para dagshub/mlflow
 if DAGSHUB_TOKEN:
     os.environ["DAGSHUB_USER_TOKEN"] = DAGSHUB_TOKEN
-    print(f"[SETUP] Token DagsHub configurado desde código (len={len(DAGSHUB_TOKEN)})")
-
-# Ruta al archivo del modelo (fallback local)
-_MODELO_PATH = os.path.join(os.path.dirname(__file__), "model.pkl")
+    print(f"[SETUP] Token DagsHub configurado (len={len(DAGSHUB_TOKEN)})")
+else:
+    print("[SETUP] ⚠️ DAGSHUB_USER_TOKEN no configurado. Revisa el archivo .env")
 
 # Variables globales (singleton)
 _modelo = None
@@ -39,15 +39,13 @@ _dagshub_initialized = False
 
 def _verificar_token():
     """Verifica si hay token de DagsHub configurado."""
-    token = os.environ.get("DAGSHUB_TOKEN") or os.environ.get("DAGSHUB_USER_TOKEN")
+    token = os.environ.get("DAGSHUB_USER_TOKEN")
     if token:
         logger.debug(f"Token DagsHub encontrado (longitud: {len(token)} chars)")
         return True
     else:
-        logger.warning("No se encontró DAGSHUB_TOKEN en variables de entorno")
-        logger.info("Para configurar el token, ejecuta:")
-        logger.info("       set DAGSHUB_TOKEN=tu_token_aqui")
-        print("       O usa: dagshub login")
+        logger.warning("No se encontró DAGSHUB_USER_TOKEN en variables de entorno")
+        logger.info("Configura el token en el archivo .env del proyecto")
         return False
 
 
@@ -71,13 +69,10 @@ def _init_dagshub():
             logger.error(f"Error conectando a DagsHub: {type(e).__name__}: {e}")
 
 
-
-
-
 def _descargar_modelo_dagshub():
     """
-    Descarga el modelo desde DagsHub (raw) intentando varias ramas.
-    Guarda el archivo descargado localmente (_MODELO_PATH) para caché.
+    Descarga el modelo desde DagsHub y lo carga directamente en memoria.
+    No guarda ningún archivo en disco.
     
     Returns:
         El contenido del archivo .pkl cargado, o None si falla.
@@ -95,12 +90,9 @@ def _descargar_modelo_dagshub():
             try:
                 response = requests.get(raw_url, auth=auth)
                 if response.status_code == 200:
-                    # Guardar en archivo local (caché persistente)
-                    with open(_MODELO_PATH, "wb") as f:
-                        f.write(response.content)
-                    
-                    logger.info(f"Modelo descargado y actualizado en: {_MODELO_PATH}")
-                    return joblib.load(_MODELO_PATH)
+                    # Cargar directamente en memoria (sin escribir a disco)
+                    logger.info("Modelo descargado desde DagsHub, cargando en memoria...")
+                    return joblib.load(io.BytesIO(response.content))
                 else:
                     logger.warning(f"Rama '{branch}' falló o no existe el archivo (Status: {response.status_code})")
             except Exception as e_req:
@@ -116,34 +108,23 @@ def _descargar_modelo_dagshub():
 
 def cargar_modelo():
     """
-    Carga el modelo de morosidad y el explainer SHAP.
-    Primero intenta descargar desde DagsHub, luego usa fallback a archivo local.
-    El archivo debe ser un diccionario con las claves 'modelo_prediccion' y 'shap_explainer'.
+    Carga el modelo de morosidad y el explainer SHAP desde DagsHub.
+    El modelo se descarga y se mantiene únicamente en memoria.
     Se carga una sola vez (singleton pattern).
     
     Returns:
-        Tupla (modelo, explainer), o (None, None) si no existe el archivo.
+        Tupla (modelo, explainer), o (None, None) si no se pudo descargar.
     """
     global _modelo, _explainer, _version
     
     if _modelo is not None:
         return _modelo, _explainer
     
-    # Primero: intentar descargar desde DagsHub
-    # Esto actualizará el archivo local (_MODELO_PATH) si tiene éxito
+    # Descargar modelo desde DagsHub (solo fuente disponible)
     model_pack = _descargar_modelo_dagshub()
     
-    # Fallback: Usar archivo local si la descarga falló
-    if model_pack is None and os.path.exists(_MODELO_PATH):
-        logger.warning("Falló la descarga -> Usando modelo local (Offline Mode)")
-        try:
-            model_pack = joblib.load(_MODELO_PATH)
-        except Exception as e:
-            logger.error(f"Error cargando fallback local: {e}")
-            model_pack = None
-    
     if model_pack is None:
-        logger.error("No se pudo cargar el modelo desde ninguna fuente (ni DagsHub ni local)")
+        logger.error("No se pudo cargar el modelo desde DagsHub")
         return None, None
     
     # Extraer componentes del paquete
@@ -187,8 +168,7 @@ def obtener_modelo():
     if modelo is None:
         raise RuntimeError(
             "El modelo de morosidad no está disponible. "
-            "Verifica la conexión a DagsHub o agrega el archivo model.pkl "
-            "en la carpeta src/morosidad/models_files/"
+            "Verifica la conexión a DagsHub y las credenciales en el archivo .env"
         )
     return modelo
 
