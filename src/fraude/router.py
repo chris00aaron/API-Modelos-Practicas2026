@@ -7,18 +7,30 @@ router = APIRouter(
     tags=["Fraud Detection"]
 )
 
-# Instanciamos el servicio una única vez al cargar el módulo
-try:
-    fraud_service = FraudService()
-except Exception as e:
-    print(f"CRITICAL ERROR: No se pudo inicializar el servicio de fraude: {e}")
-    fraud_service = None
+# Singleton con lazy loading para evitar doble descarga del modelo
+_fraud_service = None
+
+def get_fraud_service():
+    """
+    Obtiene la instancia del servicio de fraude (singleton).
+    La instancia se crea solo la primera vez que se llama.
+    """
+    global _fraud_service
+    if _fraud_service is None:
+        try:
+            _fraud_service = FraudService()
+        except Exception as e:
+            print(f"CRITICAL ERROR: No se pudo inicializar el servicio de fraude: {e}")
+            raise HTTPException(
+                status_code=503, 
+                detail="El servicio de fraude no está disponible. Error de inicialización."
+            )
+    return _fraud_service
 
 @router.post("/predict", response_model=FraudOutput)
 async def predict_fraud(input_data: FraudInput):
     """Predice fraude para una sola transacción"""
-    if not fraud_service:
-        raise HTTPException(status_code=503, detail="El servicio de fraude no está disponible. Error de inicialización.")
+    fraud_service = get_fraud_service()
     
     try:
         result = fraud_service.predict(input_data)
@@ -33,8 +45,7 @@ async def predict_fraud_batch(batch_input: BatchFraudInput):
     Más eficiente que llamar /predict múltiples veces.
     Máximo recomendado: 100 transacciones por lote.
     """
-    if not fraud_service:
-        raise HTTPException(status_code=503, detail="El servicio de fraude no está disponible. Error de inicialización.")
+    fraud_service = get_fraud_service()
     
     if len(batch_input.transactions) > 100:
         raise HTTPException(status_code=400, detail="Máximo 100 transacciones por lote")
