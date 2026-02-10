@@ -1,5 +1,6 @@
 import numpy as np
 import logging
+
 from .atm_model_provider import AtmModelProvider, ModeloActualizandoseError
 from src.retiro_atm.schema import InputDataRetiroAtm, OutputDataRetiroAtm
 
@@ -19,6 +20,7 @@ class ServicioPrediccionRetiroAtm:
         prediccion_final = float(np.expm1(y_pred_log)[0])
 
         return OutputDataRetiroAtm(atm=input_data.atm, retiro=prediccion_final)
+
 
     def predecir_retiro_lote(self, inputs: list[InputDataRetiroAtm]) -> list[OutputDataRetiroAtm]:
         """Realiza predicciones en lote de forma eficiente."""
