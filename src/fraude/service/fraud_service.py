@@ -1,31 +1,31 @@
 import pandas as pd
 import numpy as np
-import joblib
-import os
 import shap
 from datetime import datetime
 from fraude.schema.inputs import FraudInput, FraudOutput, RiskFactor, BatchFraudInput, BatchFraudOutput
+from fraude.models_files import obtener_modelo_pack, obtener_version
 
 class FraudService:
     def __init__(self):
-        # Ruta dinámica al modelo
-        self.model_path = os.path.join(os.path.dirname(__file__), '../models_files/fraud_v1.pkl')
+        # Cargar modelo desde DagsHub (no hay archivo local)
         self._load_model()
 
     def _load_model(self):
-        """Carga el modelo y sus componentes en memoria una sola vez (Singleton implícito)"""
+        """Carga el modelo y sus componentes desde DagsHub en memoria una sola vez"""
         try:
-            print(f"Cargando modelo desde: {self.model_path}")
-            model_pack = joblib.load(self.model_path)
+            print("Cargando modelo de fraude desde DagsHub...")
+            model_pack = obtener_modelo_pack()
+            
             self.scaler = model_pack['scaler']
             self.xgb_model = model_pack['model_xgb']
             self.if_model = model_pack['model_if']
             self.encoders = model_pack['encoders']
             self.explainer = model_pack.get('explainer')
-            print("Modelo y SHAP Explainer cargados correctamente.")
+            
+            print(f"Modelo de fraude v{obtener_version()} y SHAP Explainer cargados correctamente.")
         except Exception as e:
-            print(f"Error cargando el modelo: {e}")
-            raise RuntimeError("No se pudo iniciar el servicio de IA de Fraude")
+            print(f"Error cargando el modelo desde DagsHub: {e}")
+            raise RuntimeError("No se pudo iniciar el servicio de IA de Fraude. Verifica la conexión a DagsHub.")
 
     def _haversine(self, lon1, lat1, lon2, lat2):
         """Calcula distancia en km entre dos puntos geográficos"""

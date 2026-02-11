@@ -51,6 +51,14 @@ async def startup_event():
         print("[STARTUP] Modelo de morosidad precargado correctamente")
     except Exception as e:
         print(f"[STARTUP] Error precargando modelo de morosidad: {e}")
+    
+    print("[STARTUP] Precargando modelo de fraude...")
+    try:
+        from fraude.models_files import cargar_modelo as cargar_modelo_fraude
+        cargar_modelo_fraude()
+        print("[STARTUP] Modelo de fraude precargado correctamente")
+    except Exception as e:
+        print(f"[STARTUP] Error precargando modelo de fraude: {e}")
 
 #Codigo base
 @app.get("/vivo",tags=["Verificación de la disponibilidad de la api"])
