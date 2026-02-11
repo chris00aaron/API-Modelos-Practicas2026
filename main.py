@@ -46,7 +46,7 @@ async def startup_event():
     """Precarga los modelos al iniciar la API para ver logs de conexión."""
     print("[STARTUP] Precargando modelo de morosidad...")
     try:
-        from src.morosidad.models_files import cargar_modelo
+        from morosidad.models_files import cargar_modelo
         cargar_modelo()
         print("[STARTUP] Modelo de morosidad precargado correctamente")
     except Exception as e:
