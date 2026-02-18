@@ -27,6 +27,30 @@ class FraudService:
             print(f"Error cargando el modelo desde DagsHub: {e}")
             raise RuntimeError("No se pudo iniciar el servicio de IA de Fraude. Verifica la conexión a DagsHub.")
 
+    def reload_model(self):
+        """
+        Fuerza la recarga del modelo desde DagsHub en caliente.
+        Actualiza los componentes internos con la nueva versión descargada.
+        """
+        try:
+            from fraude.models_files import recargar_modelo, obtener_version
+            print("🔄 Iniciando recarga de modelo en caliente...")
+            
+            # Forzar descarga y recarga
+            recargar_modelo()
+            
+            # Volver a cargar componentes en esta instancia
+            self._load_model()
+            
+            return {
+                "status": "success", 
+                "message": f"Modelo recargado correctamente. Nueva versión: {obtener_version()}",
+                "version": obtener_version()
+            }
+        except Exception as e:
+            print(f"❌ Error recargando modelo: {e}")
+            raise RuntimeError(f"Error recargando modelo: {str(e)}")
+
     def _haversine(self, lon1, lat1, lon2, lat2):
         """Calcula distancia en km entre dos puntos geográficos"""
         lon1, lat1, lon2, lat2 = map(np.radians, [lon1, lat1, lon2, lat2])

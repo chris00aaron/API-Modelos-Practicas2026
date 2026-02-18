@@ -56,3 +56,19 @@ async def predict_fraud_batch(batch_input: BatchFraudInput):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error procesando el lote: {str(e)}")
 
+
+
+
+@router.post("/reload")
+async def reload_model_endpoint():
+    """
+    Endpoint administrativo para recargar el modelo en caliente desde DagsHub.
+    Útil cuando se ha promovido un nuevo modelo champion.
+    """
+    fraud_service = get_fraud_service()
+    
+    try:
+        result = fraud_service.reload_model()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error recargando modelo: {str(e)}")

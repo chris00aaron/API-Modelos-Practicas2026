@@ -105,6 +105,23 @@ def _descargar_modelo_dagshub():
         return None
 
 
+def recargar_modelo():
+    """
+    Fuerza la descarga y recarga del modelo desde DagsHub.
+    Limpia la caché global y vuelve a llamar a cargar_modelo().
+    
+    Returns:
+        Diccionario con el nuevo modelo cargado.
+    """
+    global _model_pack, _version, _dagshub_initialized
+    
+    logger.info("🔄 Solicitud de recarga de modelo recibida. Limpiando caché...")
+    _model_pack = None
+    _dagshub_initialized = False # Forzar reconexión por si acaso
+    
+    return cargar_modelo()
+
+
 def cargar_modelo():
     """
     Carga el modelo de fraude desde DagsHub.
