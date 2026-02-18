@@ -106,19 +106,24 @@ def _descargar_modelo_dagshub():
         return None
 
 
-def cargar_modelo():
+def cargar_modelo(force_reload=False):
     """
     Carga el modelo de morosidad y el explainer SHAP desde DagsHub.
     El modelo se descarga y se mantiene únicamente en memoria.
-    Se carga una sola vez (singleton pattern).
+    Se carga una sola vez (singleton pattern), a menos que force_reload=True.
+    
+    Args:
+        force_reload (bool): Si es True, descarga de nuevo aunque ya exista en memoria.
     
     Returns:
         Tupla (modelo, explainer), o (None, None) si no se pudo descargar.
     """
     global _modelo, _explainer, _version
     
-    if _modelo is not None:
+    if _modelo is not None and not force_reload:
         return _modelo, _explainer
+    
+    logger.info(f"🔄 Cargando modelo (force_reload={force_reload})...")
     
     # Descargar modelo desde DagsHub (solo fuente disponible)
     model_pack = _descargar_modelo_dagshub()
