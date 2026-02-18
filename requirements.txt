@@ -12,3 +12,4 @@ shap
 dagshub
 mlflow
 python-dotenv
+psycopg2-binary

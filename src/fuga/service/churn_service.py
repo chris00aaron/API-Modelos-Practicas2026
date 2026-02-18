@@ -1,31 +1,15 @@
-import joblib
 import pandas as pd
 import numpy as np
-import os
 
-# Rutas dinámicas
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_PATH = os.path.join(BASE_DIR, "models_files", "best_model_churn.pkl")
-SCALER_PATH = os.path.join(BASE_DIR, "models_files", "scaler.pkl")
-FEATURES_PATH = os.path.join(BASE_DIR, "models_files", "feature_names.pkl")
+# Import from DagsHub loader instead of local files
+from fuga.models_files.loader import obtener_modelo, obtener_scaler, obtener_feature_names
 
 class ChurnService:
     def __init__(self):
-        self.model = self._load_file(MODEL_PATH)
-        self.scaler = self._load_file(SCALER_PATH)
-        self.feature_names = self._load_file(FEATURES_PATH)
-
-    def _load_file(self, path):
-        try:
-            if os.path.exists(path):
-                print(f"✅ Cargado: {path}")
-                return joblib.load(path)
-            else:
-                print(f"❌ Error: No se encuentra {path}")
-                return None
-        except Exception as e:
-            print(f"❌ Error cargando {path}: {e}")
-            return None
+        # Load from DagsHub (downloads once and caches in memory)
+        self.model = obtener_modelo()
+        self.scaler = obtener_scaler()
+        self.feature_names = obtener_feature_names()
 
     def preprocess_data(self, input_dict: dict):
         """
@@ -132,6 +116,7 @@ class ChurnService:
     def generate_explanations(self, data: dict, probability: float):
         """
         Genera factores de riesgo basados en la lógica del negocio y el modelo.
+        Evalúa las 10 variables del modelo XGBoost para dar una explicación completa.
         Retorna una lista de objetos {feature, impact, type}.
         """
         factors = []
@@ -140,15 +125,21 @@ class ChurnService:
         age = data.get('Age', 0)
         if age > 45:
             factors.append({
-                "feature": f"Edad Avanzada ({age})",
+                "feature": f"Edad Avanzada ({age} años)",
                 "impact": 30, 
-                "type": "negative" # Negative para el cliente = Aumenta Riesgo de Fuga
+                "type": "negative"
+            })
+        elif age > 35:
+            factors.append({
+                "feature": f"Edad Media ({age} años)",
+                "impact": 10,
+                "type": "negative"
             })
         elif age < 30:
             factors.append({
-                "feature": "Edad Joven",
+                "feature": f"Edad Joven ({age} años)",
                 "impact": -15, 
-                "type": "positive" # Positive = Ayuda a retener
+                "type": "positive"
             })
 
         # 2. Miembro Activo
@@ -161,17 +152,23 @@ class ChurnService:
             })
         else:
             factors.append({
-                "feature": "Inactividad",
+                "feature": "Cliente Inactivo",
                 "impact": 20,
                 "type": "negative"
             })
 
         # 3. Balance
         balance = data.get('Balance', 0)
-        if balance > 100000:
+        if balance > 150000:
+            factors.append({
+                "feature": f"Balance Muy Alto (${balance:,.0f})",
+                "impact": 25,
+                "type": "negative"
+            })
+        elif balance > 100000:
              factors.append({
-                "feature": "Balance Alto",
-                "impact": 15, # A veces saldos altos son más volátiles
+                "feature": f"Balance Alto (${balance:,.0f})",
+                "impact": 15,
                 "type": "negative"
             })
         elif balance == 0:
@@ -180,32 +177,137 @@ class ChurnService:
                 "impact": 10,
                 "type": "negative"
             })
+        elif balance > 50000:
+            factors.append({
+                "feature": f"Balance Saludable (${balance:,.0f})",
+                "impact": -10,
+                "type": "positive"
+            })
 
         # 4. Productos
         products = data.get('NumOfProducts', 1)
         if products >= 3:
             factors.append({
-                "feature": "Exceso Productos",
-                "impact": 40, # 3 o 4 productos suelen tener mucha fuga
+                "feature": f"Exceso de Productos ({products})",
+                "impact": 40,
                 "type": "negative"
             })
         elif products == 2:
             factors.append({
-                "feature": "Vinculación Óptima",
+                "feature": "Vinculación Óptima (2 productos)",
                 "impact": -20,
                 "type": "positive"
+            })
+        elif products == 1:
+            factors.append({
+                "feature": "Baja Vinculación (1 producto)",
+                "impact": 10,
+                "type": "negative"
             })
 
         # 5. Score Crediticio
         score = data.get('CreditScore', 600)
         if score < 450:
             factors.append({
-                "feature": "Score Crediticio Bajo",
+                "feature": f"Score Crediticio Muy Bajo ({score})",
                 "impact": 35,
                 "type": "negative"
             })
+        elif score < 550:
+            factors.append({
+                "feature": f"Score Crediticio Bajo ({score})",
+                "impact": 20,
+                "type": "negative"
+            })
+        elif score > 750:
+            factors.append({
+                "feature": f"Score Crediticio Excelente ({score})",
+                "impact": -15,
+                "type": "positive"
+            })
 
-        # Ordenar por impacto absoluto y devolver top 5
-        return sorted(factors, key=lambda x: abs(x['impact']), reverse=True)[:5]
+        # 6. Geografía (Alemania tiene históricamente mayor tasa de churn)
+        geography = data.get('Geography', 'Unknown')
+        if geography in ('Germany', 'Alemania'):
+            factors.append({
+                "feature": f"Geografía de Riesgo ({geography})",
+                "impact": 25,
+                "type": "negative"
+            })
+        elif geography in ('France', 'Francia'):
+            factors.append({
+                "feature": f"Geografía Estable ({geography})",
+                "impact": -10,
+                "type": "positive"
+            })
+        elif geography in ('Spain', 'España'):
+            factors.append({
+                "feature": f"Geografía Favorable ({geography})",
+                "impact": -12,
+                "type": "positive"
+            })
+
+        # 7. Género (Mujeres tienen históricamente mayor tasa de churn en este dataset)
+        gender = data.get('Gender', 'Unknown')
+        if gender == 'Female':
+            factors.append({
+                "feature": "Género Femenino (mayor riesgo histórico)",
+                "impact": 15,
+                "type": "negative"
+            })
+        elif gender == 'Male':
+            factors.append({
+                "feature": "Género Masculino (menor riesgo histórico)",
+                "impact": -8,
+                "type": "positive"
+            })
+
+        # 8. Antigüedad (Tenure)
+        tenure = data.get('Tenure', 5)
+        if tenure <= 1:
+            factors.append({
+                "feature": f"Cliente Nuevo ({tenure} año{'s' if tenure != 1 else ''})",
+                "impact": 20,
+                "type": "negative"
+            })
+        elif tenure <= 3:
+            factors.append({
+                "feature": f"Baja Antigüedad ({tenure} años)",
+                "impact": 10,
+                "type": "negative"
+            })
+        elif tenure >= 8:
+            factors.append({
+                "feature": f"Alta Fidelización ({tenure} años)",
+                "impact": -18,
+                "type": "positive"
+            })
+
+        # 9. Tarjeta de Crédito
+        has_card = data.get('HasCrCard', 1)
+        if has_card == 0:
+            factors.append({
+                "feature": "Sin Tarjeta de Crédito",
+                "impact": 12,
+                "type": "negative"
+            })
+
+        # 10. Salario Estimado
+        salary = data.get('EstimatedSalary', 50000)
+        if salary < 30000:
+            factors.append({
+                "feature": f"Salario Bajo (${salary:,.0f})",
+                "impact": 15,
+                "type": "negative"
+            })
+        elif salary > 150000:
+            factors.append({
+                "feature": f"Salario Alto (${salary:,.0f})",
+                "impact": -10,
+                "type": "positive"
+            })
+
+        # Ordenar por impacto absoluto y devolver top 7
+        return sorted(factors, key=lambda x: abs(x['impact']), reverse=True)[:7]
 
 churn_service = ChurnService()
