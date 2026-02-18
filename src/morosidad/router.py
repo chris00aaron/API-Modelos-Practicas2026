@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException
 
 from morosidad.schema import MorosidadRequest, MorosidadResponse, BatchMorosidadRequest, BatchMorosidadResponse
 from morosidad.service import predecir_morosidad, predecir_morosidad_batch
+from morosidad.models_files.loader import cargar_modelo, obtener_version
 
 
 router = APIRouter(
@@ -52,4 +53,41 @@ def predict_batch(request: BatchMorosidadRequest) -> BatchMorosidadResponse:
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en la predicción batch: {str(e)}")
+
+
+@router.post(
+    "/refresh-model",
+    summary="Hot Reload del Modelo",
+    description="Fuerza la descarga del último modelo desde DagsHub y actualiza la memoria."
+)
+def refresh_model():
+    """
+    Endpoint administrativo para actualizar el modelo en caliente sin reiniciar el servicio.
+    """
+    try:
+        model, _ = cargar_modelo(force_reload=True)
+        if model:
+            version = obtener_version()
+            return {"status": "success", "message": f"Modelo recargado correctamente. Versión: {version}"}
+        else:
+            raise HTTPException(status_code=500, detail="Fallo al descargar el modelo desde DagsHub")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error en Hot Reload: {str(e)}")
+
+
+@router.get(
+    "/model-version",
+    summary="Versión del Modelo Cargado",
+    description="Retorna la versión del modelo actualmente cargado en memoria."
+)
+def model_version():
+    """
+    Retorna la versión del modelo cargado para verificación cruzada
+    con el registro en production_model_default.
+    """
+    try:
+        version = obtener_version()
+        return {"version": version}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo versión: {str(e)}")
 
