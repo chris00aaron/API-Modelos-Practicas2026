@@ -1,208 +1,218 @@
+"""
+loader.py — Modelo de Fraude: descarga y caché en memoria desde DagsHub.
 
+Responsabilidad única: descargar el .pkl del champion y exponerlo como singleton
+thread-safe mediante una clase. No guarda archivos en disco.
+"""
+import io
 import logging
 import os
-import io
-import joblib
 
 import dagshub
+import joblib
 import mlflow
 import requests
-
+import threading
 from dotenv import load_dotenv
 
-# Cargar variables de entorno desde .env
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Configuración DagsHub
-DAGSHUB_REPO_OWNER = "notificacionesbankmind"
-DAGSHUB_REPO_NAME = "Modelos_BankMind_2026"
-DAGSHUB_MODEL_PATH = "modelos/fraude/modelo_producción.pkl"
+# ---------------------------------------------------------------------------
+# Configuración DagsHub (constantes a nivel de módulo — solo lectura)
+# ---------------------------------------------------------------------------
+_REPO_OWNER = "notificacionesbankmind"
+_REPO_NAME = "Modelos_BankMind_2026"
+_MODEL_PATH = "modelos/fraude/modelo.pkl" # Modelo inicial: modelo_producción.pkl
+_BRANCHES = ["main", "master"]
 
-# Token de DagsHub (desde variable de entorno)
-DAGSHUB_TOKEN = os.environ.get("DAGSHUB_USER_TOKEN")
-
-# Configurar token en variables de entorno para dagshub/mlflow
-if DAGSHUB_TOKEN:
-    os.environ["DAGSHUB_USER_TOKEN"] = DAGSHUB_TOKEN
-    print(f"[SETUP] Token DagsHub configurado (len={len(DAGSHUB_TOKEN)})")
-else:
-    print("[SETUP] ⚠️ DAGSHUB_USER_TOKEN no configurado. Revisa el archivo .env")
-
-# Variables globales (singleton)
-_model_pack = None
-_version = "v1.0"  # Valor por defecto
-_dagshub_initialized = False
+# Timeout para HTTP: (connect_timeout, read_timeout) en segundos
+_HTTP_TIMEOUT = (10, 60)
 
 
-def _verificar_token():
-    """Verifica si hay token de DagsHub configurado."""
-    token = os.environ.get("DAGSHUB_USER_TOKEN")
-    if token:
-        logger.debug(f"Token DagsHub encontrado (longitud: {len(token)} chars)")
-        return True
-    else:
-        logger.warning("No se encontró DAGSHUB_USER_TOKEN en variables de entorno")
-        logger.info("Configura el token en el archivo .env del proyecto")
-        return False
+# ---------------------------------------------------------------------------
+# ModelLoader — encapsula el estado global eliminando variables globales
+# ---------------------------------------------------------------------------
+class ModelLoader:
+    """
+    Singleton que gestiona el ciclo de vida del modelo champion de fraude.
 
+    - Descarga el .pkl desde DagsHub (solo si no está en memoria).
+    - Expone reload() para actualizaciones en caliente.
+    - Thread-safe en CPython gracias al GIL; si se usa multiprocessing
+      cada worker gestiona su propia instancia.
+    """
 
-def _init_dagshub():
-    """Inicializa la conexión a DagsHub/MLflow."""
-    global _dagshub_initialized
-    if not _dagshub_initialized:
-        logger.debug(f"Intentando conectar a DagsHub: {DAGSHUB_REPO_OWNER}/{DAGSHUB_REPO_NAME}")
-        _verificar_token()
-        
-        try:
-            dagshub.init(
-                repo_owner=DAGSHUB_REPO_OWNER,
-                repo_name=DAGSHUB_REPO_NAME,
-                mlflow=True
+    def __init__(self):
+        self._model_pack: dict | None = None
+        self._version: str = "v1.0"
+        self._dagshub_initialized: bool = False
+        self._token: str | None = os.environ.get("DAGSHUB_USER_TOKEN")
+        self._lock = threading.Lock()
+
+        if not self._token:
+            logger.warning(
+                "DAGSHUB_USER_TOKEN no configurado. "
+                "Revisa el archivo .env antes de arrancar el servidor."
             )
-            _dagshub_initialized = True
-            logger.info(f"Conectado a DagsHub: {DAGSHUB_REPO_OWNER}/{DAGSHUB_REPO_NAME}")
-            logger.debug(f"MLflow Tracking URI: {mlflow.get_tracking_uri()}")
-        except Exception as e:
-            logger.error(f"Error conectando a DagsHub: {type(e).__name__}: {e}")
 
+    # ------------------------------------------------------------------
+    # Pública
+    # ------------------------------------------------------------------
 
-def _descargar_modelo_dagshub():
-    """
-    Descarga el modelo desde DagsHub y lo carga directamente en memoria.
-    No guarda ningún archivo en disco.
-    
-    Returns:
-        El contenido del archivo .pkl cargado, o None si falla.
-    """
-    try:
-        _init_dagshub()
-        
-        auth = (DAGSHUB_TOKEN, "") if DAGSHUB_TOKEN else None
-        branches = ["main", "master"]
-        
-        for branch in branches:
-            raw_url = f"https://dagshub.com/{DAGSHUB_REPO_OWNER}/{DAGSHUB_REPO_NAME}/raw/{branch}/{DAGSHUB_MODEL_PATH}"
-            logger.info(f"Intentando descargar modelo desde: {raw_url}")
-            
+    @property
+    def version(self) -> str:
+        return self._version
+
+    def get(self) -> dict:
+        """
+        Devuelve el model_pack (singleton). Lo descarga si aún no está en
+        memoria.
+
+        Raises:
+            RuntimeError: Si el modelo no pudo cargarse desde DagsHub.
+        """
+        if self._model_pack is None:
+            with self._lock:
+                if self._model_pack is None:
+                    self._load()
+        if self._model_pack is None:
+            raise RuntimeError(
+                "El modelo de fraude no está disponible. "
+                "Verifica la conexión a DagsHub y las credenciales en .env"
+            )
+        return self._model_pack
+
+    def reload(self) -> dict:
+        """
+        Fuerza la descarga y re-carga del champion desde DagsHub.
+        Si la descarga o validación falla, el modelo anterior se preserva.
+
+        Returns:
+            El nuevo model_pack cargado.
+
+        Raises:
+            ValueError: Si el nuevo modelo no pudo cargarse. El pack anterior
+                        se restaura automáticamente.
+        """
+        with self._lock:
+            previous_pack = self._model_pack
+            previous_version = self._version
+            logger.info("🔄 Recarga solicitada — descargando nuevo modelo de fraude...")
+            self._model_pack = None
+            self._dagshub_initialized = False
             try:
-                response = requests.get(raw_url, auth=auth)
+                self._load()
+                logger.info("✅ Recarga completada. Nueva versión: %s", self._version)
+            except ValueError as exc:
+                # Restaurar modelo anterior — el servicio sigue operativo
+                self._model_pack = previous_pack
+                self._version = previous_version
+                logger.error(
+                    "❌ Recarga fallida: %s. Manteniendo modelo anterior (v%s).",
+                    exc, previous_version,
+                )
+                raise
+        return self._model_pack
+
+    # ------------------------------------------------------------------
+    # Privada
+    # ------------------------------------------------------------------
+
+    def _init_dagshub(self) -> None:
+        if self._dagshub_initialized:
+            return
+        try:
+            logger.debug("Inicializando conexión DagsHub: %s/%s", _REPO_OWNER, _REPO_NAME)
+            dagshub.init(repo_owner=_REPO_OWNER, repo_name=_REPO_NAME, mlflow=True)
+            self._dagshub_initialized = True
+            logger.info("DagsHub inicializado. MLflow URI: %s", mlflow.get_tracking_uri())
+        except Exception as exc:
+            logger.error("Error inicializando DagsHub: %s: %s", type(exc).__name__, exc)
+
+    def _download(self) -> dict | None:
+        """
+        Descarga el .pkl desde DagsHub directamente en memoria.
+
+        Returns:
+            dict con los componentes del modelo, o None si falla.
+        """
+        self._init_dagshub()
+        auth = (self._token, "") if self._token else None
+
+        for branch in _BRANCHES:
+            url = (
+                f"https://dagshub.com/{_REPO_OWNER}/{_REPO_NAME}"
+                f"/raw/{branch}/{_MODEL_PATH}"
+            )
+            logger.info("Descargando modelo de fraude desde: %s", url)
+            try:
+                response = requests.get(url, auth=auth, timeout=_HTTP_TIMEOUT)
                 if response.status_code == 200:
-                    # Cargar directamente en memoria (sin escribir a disco)
-                    logger.info("Modelo descargado desde DagsHub, cargando en memoria...")
+                    logger.info("Descarga completada (%d bytes). Cargando en memoria...",
+                                len(response.content))
                     return joblib.load(io.BytesIO(response.content))
-                else:
-                    logger.warning(f"Rama '{branch}' falló o no existe el archivo (Status: {response.status_code})")
-            except Exception as e_req:
-                logger.warning(f"Error conectando a rama '{branch}': {e_req}")
+                logger.warning(
+                    "Rama '%s' respondió %d — probando siguiente rama.",
+                    branch, response.status_code,
+                )
+            except requests.exceptions.Timeout:
+                logger.error("Timeout descargando modelo desde rama '%s' (%s)", branch, url)
+            except Exception as exc:
+                logger.warning("Error conectando a rama '%s': %s", branch, exc)
 
-        logger.error("No se pudo descargar el modelo de ninguna rama.")
+        logger.error("No se pudo descargar el modelo de ninguna rama de DagsHub.")
         return None
-        
-    except Exception as e:
-        logger.warning(f"Error general en descarga DagsHub: {e}")
-        return None
 
+    def _load(self) -> None:
+        """
+        Descarga el modelo, lo valida y lo guarda en caché.
 
-def recargar_modelo():
-    """
-    Fuerza la descarga y recarga del modelo desde DagsHub.
-    Limpia la caché global y vuelve a llamar a cargar_modelo().
-    
-    Returns:
-        Diccionario con el nuevo modelo cargado.
-    """
-    global _model_pack, _version, _dagshub_initialized
-    
-    logger.info("🔄 Solicitud de recarga de modelo recibida. Limpiando caché...")
-    _model_pack = None
-    _dagshub_initialized = False # Forzar reconexión por si acaso
-    
-    return cargar_modelo()
+        Raises:
+            ValueError: Si la descarga falla, el formato es incorrecto, o
+                        el pack no contiene las claves críticas del modelo.
+        """
+        logger.info("Iniciando carga del modelo de fraude desde DagsHub...")
+        pack = self._download()
 
+        if pack is None:
+            raise ValueError(
+                "Descarga falló — DagsHub no devolvió el modelo. "
+                "Verifica conectividad y credenciales."
+            )
 
-def cargar_modelo():
-    """
-    Carga el modelo de fraude desde DagsHub.
-    El modelo se descarga y se mantiene únicamente en memoria.
-    Se carga una sola vez (singleton pattern).
-    
-    Returns:
-        Diccionario con los componentes del modelo, o None si no se pudo descargar.
-    """
-    global _model_pack, _version
-    
-    # ⚠️ CRITICAL: Verificar si ya está cargado ANTES de descargar
-    if _model_pack is not None:
-        logger.debug("Modelo de fraude ya está en memoria (singleton), reutilizando...")
-        return _model_pack
-    
-    logger.info("Iniciando carga del modelo de fraude desde DagsHub...")
-    
-    # Descargar modelo desde DagsHub (solo fuente disponible)
-    model_pack = _descargar_modelo_dagshub()
-    
-    if model_pack is None:
-        logger.error("No se pudo cargar el modelo desde DagsHub")
-        return None
-    
-    # Verificar estructura del modelo
-    if isinstance(model_pack, dict):
-        # Verificar que tenga los componentes esperados
-        required_keys = ['scaler', 'model_xgb', 'model_if', 'encoders']
-        missing_keys = [key for key in required_keys if key not in model_pack]
-        
-        if missing_keys:
-            logger.warning(f"El modelo no contiene las claves esperadas: {missing_keys}")
-        
-        # Extraer metadatos si existen
-        meta = model_pack.get('meta_info', {})
+        if not isinstance(pack, dict):
+            raise ValueError(
+                f"El .pkl descargado no tiene el formato esperado (dict). "
+                f"Tipo recibido: {type(pack).__name__}"
+            )
+
+        required = {"scaler", "model_xgb", "model_if", "encoders"}
+        missing = required - pack.keys()
+        if missing:
+            raise ValueError(
+                f"model_pack incompleto — faltan claves críticas: {missing}. "
+                "El modelo no puede operar sin ellas."
+            )
+
+        meta = pack.get("meta_info", {})
         if isinstance(meta, dict):
-            _version = meta.get('version', "v1.0")
-        
-        # Guardar en cache global
-        _model_pack = model_pack
-        
-        logger.info(f"Modelo de fraude cargado correctamente. Versión: {_version}")
-        
-        if model_pack.get('explainer'):
+            self._version = meta.get("version", "v1.0")
+
+        if pack.get("explainer"):
             logger.info("SHAP Explainer cargado correctamente.")
         else:
-            logger.warning("No se encontró 'explainer' en el archivo .pkl")
-    else:
-        logger.error("El formato del modelo no es el esperado (debería ser un diccionario)")
-        return None
-    
-    return _model_pack
+            logger.warning(
+                "No se encontró 'explainer' en el .pkl. "
+                "La explicabilidad SHAP no estará disponible."
+            )
+
+        self._model_pack = pack
+        logger.info("✅ Modelo de fraude cargado. Versión: %s", self._version)
 
 
-def obtener_modelo_pack():
-    """
-    Obtiene el model pack completo ya cargado.
-    Si no está cargado, intenta cargarlo.
-    
-    Returns:
-        Diccionario con todos los componentes del modelo.
-    
-    Raises:
-        RuntimeError: Si el modelo no está disponible.
-    """
-    modelo_pack = cargar_modelo()
-    if modelo_pack is None:
-        raise RuntimeError(
-            "El modelo de fraude no está disponible. "
-            "Verifica la conexión a DagsHub y las credenciales en el archivo .env"
-        )
-    return modelo_pack
-
-
-def obtener_version():
-    """
-    Obtiene la versión del modelo cargado.
-    
-    Returns:
-        String con la versión (ej: "v1.0")
-    """
-    cargar_modelo()
-    return _version
+# ---------------------------------------------------------------------------
+# Instancia singleton del módulo — importada por fraud_service.py
+# ---------------------------------------------------------------------------
+model_loader = ModelLoader()

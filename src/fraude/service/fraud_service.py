@@ -1,248 +1,478 @@
-import pandas as pd
+"""
+fraud_service.py — Servicio de predicción de fraude.
+
+Responsabilidad: feature engineering, encode, scale, predict, SHAP explanation.
+No gestiona el ciclo de vida del modelo (eso lo hace ModelLoader).
+"""
+import logging
+from typing import Optional
+
+from dateutil.relativedelta import relativedelta
 import numpy as np
-import shap
-from datetime import datetime
-from fraude.schema.inputs import FraudInput, FraudOutput, RiskFactor, BatchFraudInput, BatchFraudOutput
-from fraude.models_files import obtener_modelo_pack, obtener_version
+import pandas as pd
+from xgboost import XGBClassifier
+
+from fraude.models_files import model_loader
+from fraude.schema.inputs import (
+    AuditData,
+    BatchFraudInput,
+    BatchFraudOutput,
+    FraudInput,
+    FraudOutput,
+    RiskFactor,
+)
+
+logger = logging.getLogger(__name__)
+
+# Columnas que deben escalarse antes de pasar al modelo
+_COLS_TO_SCALE = ["amt", "city_pop", "age", "distance_km", "hour"]
+
+# Columnas categóricas a codificar
+_CATEGORICAL_COLS = ["category", "gender", "job"]
+
+# Adaptador de contrato: Java envía 'M'/'F', el encoder espera 'male'/'female'
+_GENDER_NORMALIZE: dict[str, str] = {
+    "m": "male",
+    "f": "female",
+}
+
+
+def _haversine(lon1, lat1, lon2, lat2):
+    """Distancia en km entre dos puntos (Haversine). Trabaja con escalares o arrays."""
+    lon1, lat1, lon2, lat2 = map(np.radians, [lon1, lat1, lon2, lat2])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+    return 6371.0 * 2 * np.arcsin(np.sqrt(a))
+
+
+def _wrap_xgb(old_xgb) -> XGBClassifier:
+    """
+    Re-envuelve un XGBClassifier serializado con una versión antigua de XGBoost
+    en una instancia limpia compatible con la versión instalada.
+
+    Usa la API pública `get_booster().save_raw()` / `load_model()` en lugar de
+    atributos privados. Esto es estable entre versiones de XGBoost >= 1.6.
+    """
+    try:
+        booster = old_xgb.get_booster()
+
+        # Serializar el booster entrenado a bytes usando formato UBJ (oficial)
+        raw_bytes = booster.save_raw("ubj")
+
+        # Crear instancia limpia compatible con la versión instalada
+        new_xgb = XGBClassifier(
+            eval_metric="logloss",
+            device="cpu",
+            random_state=42,
+            n_jobs=-1,
+        )
+
+        # Cargar el booster serializado — API pública, estable y garantizada
+        new_xgb.load_model(bytearray(raw_bytes))
+
+        logger.info("✅ XGBoost re-envuelto correctamente mediante save_raw/load_model.")
+        return new_xgb
+
+    except Exception as exc:
+        logger.warning(
+            "No se pudo re-envolver XGBoost (save_raw/load_model): %s. "
+            "Usando el modelo original tal cual.",
+            exc,
+        )
+        return old_xgb
+
 
 class FraudService:
+    """
+    Servicio de predicción de fraude.
+
+    *Single responsibility*: dada una transacción (o lote), devuelve
+    veredicto + score + factores SHAP.
+    """
+
     def __init__(self):
-        # Cargar modelo desde DagsHub (no hay archivo local)
-        self._load_model()
+        self._load_components()
 
-    def _load_model(self):
-        """Carga el modelo y sus componentes desde DagsHub en memoria una sola vez"""
-        try:
-            print("Cargando modelo de fraude desde DagsHub...")
-            model_pack = obtener_modelo_pack()
-            
-            self.scaler = model_pack['scaler']
-            self.xgb_model = model_pack['model_xgb']
-            self.if_model = model_pack['model_if']
-            self.encoders = model_pack['encoders']
-            self.explainer = model_pack.get('explainer')
-            
-            print(f"Modelo de fraude v{obtener_version()} y SHAP Explainer cargados correctamente.")
-        except Exception as e:
-            print(f"Error cargando el modelo desde DagsHub: {e}")
-            raise RuntimeError("No se pudo iniciar el servicio de IA de Fraude. Verifica la conexión a DagsHub.")
+    # ------------------------------------------------------------------
+    # Ciclo de vida
+    # ------------------------------------------------------------------
 
-    def reload_model(self):
+    def _load_components(self) -> None:
+        """Extrae y prepara los componentes del model_pack."""
+        pack = model_loader.get()
+
+        self.scaler = pack["scaler"]
+        self.encoders: dict = pack["encoders"]
+        self.if_model = pack["model_if"]
+        self.explainer = pack.get("explainer")
+
+        # Envolver el XGBClassifier con la API oficial de serialización
+        self.xgb_model: XGBClassifier = _wrap_xgb(pack["model_xgb"])
+
+        # Cachear feature_names una sola vez — evita llamar get_booster() en cada predicción
+        self.feature_names: list[str] = self.xgb_model.get_booster().feature_names
+
+        # Leer optimal_threshold desde meta_info (calculado por Optuna en entrenamiento)
+        meta = pack.get("meta_info", {}) or {}
+        self.threshold: float = float(meta.get("optimal_threshold", 0.5))
+        if self.threshold == 0.5 and "optimal_threshold" not in meta:
+            logger.warning(
+                "optimal_threshold no encontrado en meta_info. "
+                "Usando 0.5 como fallback — considera re-entrenar el modelo."
+            )
+        else:
+            logger.info("Threshold óptimo del modelo: %.4f", self.threshold)
+
+        logger.info(
+            "FraudService listo. Versión: %s | Threshold: %.4f | SHAP: %s",
+            model_loader.version,
+            self.threshold,
+            "disponible" if self.explainer else "no disponible",
+        )
+
+    def reload(self) -> dict:
         """
-        Fuerza la recarga del modelo desde DagsHub en caliente.
-        Actualiza los componentes internos con la nueva versión descargada.
+        Recarga el modelo desde DagsHub de forma atómica.
+        Si _load_components falla a mitad, el estado del servicio actual
+        se preserva intacto (no hay mezcla de componentes de versiones distintas).
         """
-        try:
-            from fraude.models_files import recargar_modelo, obtener_version
-            print("🔄 Iniciando recarga de modelo en caliente...")
-            
-            # Forzar descarga y recarga
-            recargar_modelo()
-            
-            # Volver a cargar componentes en esta instancia
-            self._load_model()
-            
-            return {
-                "status": "success", 
-                "message": f"Modelo recargado correctamente. Nueva versión: {obtener_version()}",
-                "version": obtener_version()
-            }
-        except Exception as e:
-            print(f"❌ Error recargando modelo: {e}")
-            raise RuntimeError(f"Error recargando modelo: {str(e)}")
+        logger.info("🔄 Recargando modelo de fraude en caliente...")
+        model_loader.reload()   # Puede lanzar ValueError — si falla, pack anterior activo
 
-    def _haversine(self, lon1, lat1, lon2, lat2):
-        """Calcula distancia en km entre dos puntos geográficos"""
-        lon1, lat1, lon2, lat2 = map(np.radians, [lon1, lat1, lon2, lat2])
-        d = 2 * 6371 * np.arcsin(np.sqrt(np.sin((lat2-lat1)/2)**2 + np.cos(lat1)*np.cos(lat2)*np.sin((lon2-lon1)/2)**2))
-        return d
+        # Construir servicio nuevo en un objeto temporal
+        # Si falla aquí, self (el servicio activo) queda sin tocar
+        new_svc = FraudService.__new__(FraudService)
+        new_svc._load_components()          # Puede lanzar — sin riesgo para self
+
+        # Todo correcto: copiar atributos atómicamente
+        self.__dict__.update(new_svc.__dict__)
+        logger.info("✅ Modelo recargado correctamente. Versión: %s", model_loader.version)
+        return {
+            "status": "success",
+            "message": f"Modelo recargado. Versión: {model_loader.version}",
+            "version": model_loader.version,
+        }
+
+    # ------------------------------------------------------------------
+    # Predicción
+    # ------------------------------------------------------------------
+
+    def predict(self, input_data: FraudInput) -> FraudOutput:
+        """Predice fraude para una única transacción."""
+        df = pd.DataFrame([input_data.dict()])
+        raw_values = df.iloc[0].to_dict()
+
+        df, raw_values, unknown_fields = self._feature_engineering(df, raw_values)
+        X_final = self._build_feature_matrix(df)
+
+        proba = float(self.xgb_model.predict_proba(X_final)[0][1])
+        veredicto = "ALTO RIESGO" if proba > self.threshold else "LEGÍTIMO"
+
+        risk_factors = self._shap_factors(X_final, raw_values) if self.explainer else []
+        if not risk_factors and veredicto == "ALTO RIESGO":
+            risk_factors = [
+                RiskFactor(
+                    feature_name="Modelo General",
+                    feature_value="N/A",
+                    shap_value=proba,
+                    risk_description="Patrón general sospechoso detectado por XGBoost",
+                    impact_direction="AUMENTA_RIESGO",
+                )
+            ]
+
+        audit = AuditData(
+            xgboost_score=proba,
+            iforest_score=float(X_final["anomaly_score"].iloc[0]),
+            base_score=(
+                float(self.explainer.expected_value)
+                if self.explainer and hasattr(self.explainer, "expected_value")
+                else 0.0
+            ),
+            threshold_used=self.threshold,
+            unknown_encoder_values=unknown_fields if unknown_fields else None,
+        )
+
+        return FraudOutput(
+            transaction_id=input_data.transaction_id,
+            veredicto=veredicto,
+            score_final=proba,
+            detalles_riesgo=risk_factors,
+            datos_auditoria=audit,
+            recomendacion="Bloquear y Notificar" if veredicto == "ALTO RIESGO" else "Aprobar",
+        )
 
     def predict_batch(self, batch_input: BatchFraudInput) -> BatchFraudOutput:
         """
-        Procesa múltiples transacciones en un solo lote.
-        Más eficiente que llamar predict() múltiples veces.
+        Predice fraude para múltiples transacciones de forma vectorizada.
+        Construye una sola matriz y llama predict_proba una vez — O(1) overhead
+        de modelo vs O(N) del enfoque secuencial anterior.
         """
+        transactions = batch_input.transactions
+        if not transactions:
+            return BatchFraudOutput(
+                total_processed=0, total_frauds=0, total_legitimate=0,
+                total_errors=0, results=[],
+            )
+
         results = []
         total_frauds = 0
         total_legitimate = 0
         total_errors = 0
-        
-        for input_data in batch_input.transactions:
-            try:
-                result = self.predict(input_data)
-                results.append(result)
-                
-                if result.veredicto == "ALTO RIESGO":
+
+        # ------------------------------------------------------------------
+        # Ruta vectorizada: un solo DataFrame, un solo predict_proba
+        # ------------------------------------------------------------------
+        try:
+            rows = [t.dict() for t in transactions]
+            df_all = pd.DataFrame(rows)
+
+            df_all, _, _ = self._feature_engineering(df_all, {})
+            X_all = self._build_feature_matrix(df_all)
+
+            probas = self.xgb_model.predict_proba(X_all)[:, 1]
+
+            # SHAP vectorizado: una sola llamada para todas las filas
+            all_shap_values = None
+            if self.explainer:
+                try:
+                    raw_shap = self.explainer.shap_values(X_all)
+                    # XGBoost binario devuelve array 2D directo o lista [clase0, clase1]
+                    all_shap_values = raw_shap[1] if isinstance(raw_shap, list) else raw_shap
+                except Exception as shap_exc:
+                    logger.warning("SHAP batch falló, se omitirá explicabilidad: %s", shap_exc)
+
+            for i, (tx, proba) in enumerate(zip(transactions, probas)):
+                proba = float(proba)
+                veredicto = "ALTO RIESGO" if proba > self.threshold else "LEGÍTIMO"
+
+                # Construir raw_row con los valores legibles para el tooltip de SHAP:
+                # - Valores categóricos originales (pre-encoding) vienen de df_all ya
+                #   procesado (gender normalizado, etc.) — suficiente para mostrar al usuario
+                # - age, hour, distance_km son derivados calculados durante el engineering
+                raw_row = transactions[i].dict()     # valores originales del request
+                raw_row["age"] = int(df_all["age"].iloc[i])
+                raw_row["hour"] = int(df_all["hour"].iloc[i])
+                raw_row["distance_km"] = round(float(df_all["distance_km"].iloc[i]), 2)
+
+                # SHAP indexado (ya calculado en batch arriba)
+                risk_factors = []
+                if all_shap_values is not None:
+                    shap_row = all_shap_values[i]
+                    risk_factors = self._build_risk_factors_from_shap(
+                        X_all.columns.tolist(), shap_row, raw_row
+                    )
+                if not risk_factors and veredicto == "ALTO RIESGO":
+                    risk_factors = [RiskFactor(
+                        feature_name="Modelo General", feature_value="N/A",
+                        shap_value=proba,
+                        risk_description="Patrón general sospechoso detectado por XGBoost",
+                        impact_direction="AUMENTA_RIESGO",
+                    )]
+
+                audit = AuditData(
+                    xgboost_score=proba,
+                    iforest_score=float(X_all["anomaly_score"].iloc[i]),
+                    base_score=0.0,
+                    threshold_used=self.threshold,
+                )
+
+                results.append(FraudOutput(
+                    transaction_id=tx.transaction_id,
+                    veredicto=veredicto,
+                    score_final=proba,
+                    detalles_riesgo=risk_factors,
+                    datos_auditoria=audit,
+                    recomendacion=(
+                        "Bloquear y Notificar" if veredicto == "ALTO RIESGO" else "Aprobar"
+                    ),
+                ))
+
+                if veredicto == "ALTO RIESGO":
                     total_frauds += 1
                 else:
                     total_legitimate += 1
-                    
-            except Exception as e:
-                # Si falla una transacción, registrar el error pero continuar con las demás
-                error_result = FraudOutput(
-                    transaction_id=input_data.transaction_id,
-                    veredicto="ERROR",
-                    score_final=0.0,
-                    detalles_riesgo=[],
-                    datos_auditoria={},
-                    recomendacion="Revisar manualmente",
-                    error=str(e)
-                )
-                results.append(error_result)
-                total_errors += 1
-        
+
+        except Exception as exc:
+            # Si falla la ruta vectorizada (datos incompatibles, etc.) hace fallback
+            # transacción a transacción para minimizar impacto al caller.
+            logger.error(
+                "Falló el path vectorizado de predict_batch (%s). "
+                "Reintentando transacción a transacción.",
+                exc,
+            )
+            results = []
+            total_frauds = total_legitimate = total_errors = 0
+            for tx in transactions:
+                try:
+                    r = self.predict(tx)
+                    results.append(r)
+                    if r.veredicto == "ALTO RIESGO":
+                        total_frauds += 1
+                    else:
+                        total_legitimate += 1
+                except Exception as tx_exc:
+                    logger.warning("Error prediciendo tx %s: %s", tx.transaction_id, tx_exc)
+                    results.append(FraudOutput(
+                        transaction_id=tx.transaction_id,
+                        veredicto="ERROR",
+                        score_final=0.0,
+                        detalles_riesgo=[],
+                        datos_auditoria=AuditData(
+                            xgboost_score=0.0, iforest_score=0.0,
+                            base_score=0.0, threshold_used=self.threshold,
+                        ),
+                        recomendacion="Revisar manualmente",
+                        error=str(tx_exc),
+                    ))
+                    total_errors += 1
+
         return BatchFraudOutput(
             total_processed=len(results),
             total_frauds=total_frauds,
             total_legitimate=total_legitimate,
             total_errors=total_errors,
-            results=results
+            results=results,
         )
 
-    def predict(self, input_data: FraudInput) -> FraudOutput:
-        try:
-            # 1. Convertir Pydantic a DataFrame
-            data_dict = input_data.dict()
-            df = pd.DataFrame([data_dict])
+    # ------------------------------------------------------------------
+    # Internos de pipeline
+    # ------------------------------------------------------------------
 
-            # Guardamos una copia de los datos crudos/legibles para la descripción
-            raw_values = df.iloc[0].to_dict()
+    def _feature_engineering(
+        self, df: pd.DataFrame, raw_values: dict
+    ) -> tuple[pd.DataFrame, dict, dict]:
+        """
+        Aplica feature engineering (age, hour, distance_km) y encoding.
 
-            # 2. Ingeniería de Características (Feature Engineering)
-            # Fechas y Edad
-            df['trans_date_trans_time'] = pd.to_datetime(df['trans_date_trans_time'])
-            df['dob'] = pd.to_datetime(df['dob'])
-            df['age'] = (df['trans_date_trans_time'] - df['dob']).dt.days // 365 # type: ignore
-            df['hour'] = df['trans_date_trans_time'].dt.hour # type: ignore
-            
-            # Distancia
-            df['distance_km'] = self._haversine(df['long'], df['lat'], df['merch_long'], df['merch_lat'])
+        Returns:
+            (df_modificado, raw_values_actualizado, dict_de_campos_desconocidos)
+        """
+        # Fechas y variables derivadas
+        df["trans_date_trans_time"] = pd.to_datetime(df["trans_date_trans_time"])
+        df["dob"] = pd.to_datetime(df["dob"])
+        # relativedelta calcula años completos considerando bisiestos correctamente
+        df["age"] = df.apply(
+            lambda r: relativedelta(r["trans_date_trans_time"], r["dob"]).years, axis=1
+        )
+        df["hour"] = df["trans_date_trans_time"].dt.hour
+        df["distance_km"] = _haversine(
+            df["long"], df["lat"], df["merch_long"], df["merch_lat"]
+        )
 
-            # Agregamos los calculados a raw_values para mostrarlos si SHAP los elige
-            raw_values['age'] = df['age'].iloc[0]
-            raw_values['hour'] = df['hour'].iloc[0]
-            raw_values['distance_km'] = round(df['distance_km'].iloc[0], 2)
+        if raw_values:
+            raw_values["age"] = int(df["age"].iloc[0])
+            raw_values["hour"] = int(df["hour"].iloc[0])
+            raw_values["distance_km"] = round(float(df["distance_km"].iloc[0]), 2)
 
-            # 3. Codificación (Encoding)
-            for col in ['category', 'gender', 'job']:
-                encoder = self.encoders[col]
-                valor_entrada = str(df[col].iloc[0])
-                
-                # Verificamos si el valor que llegó existe en el diccionario del encoder
-                if valor_entrada in encoder.classes_:
-                    df[col] = encoder.transform([valor_entrada])
-                else:
-                    # CASO: Valor desconocido (ej: "Manager")
-                    # Acción: Asignamos el primer valor conocido del encoder para no romper el flujo.
-                    # Esto permite que el modelo evalúe la transacción basándose en los otros factores (monto, hora, etc.)
-                    valor_por_defecto = encoder.classes_[0] 
-                    print(f"Aviso: Valor desconocido '{valor_entrada}' en columna '{col}'. Usando por defecto: '{valor_por_defecto}'")
-                    df[col] = encoder.transform([valor_por_defecto])
-
-            # 4. Alineación de columnas con XGBoost
-            # Obtenemos nombres exactos que espera el modelo
-            cols_entrenamiento = self.xgb_model.get_booster().feature_names
-            cols_base = [c for c in cols_entrenamiento if c != 'anomaly_score']
-            
-            X = df[cols_base].copy().astype(float)
-
-            # 5. Escalado
-            cols_to_scale = ['amt', 'city_pop', 'age', 'distance_km', 'hour']
-            X[cols_to_scale] = self.scaler.transform(X[cols_to_scale])
-
-            # 6. Isolation Forest (Anomaly Score)
-            X['anomaly_score'] = self.if_model.decision_function(X[cols_base])
-            # Guardamos el score calculado en raw_values para que salga en el JSON
-            raw_values['anomaly_score'] = round(X['anomaly_score'].iloc[0], 4)
-
-            # Reordenar final
-            X_final = X[cols_entrenamiento]
-
-            # 7. Predicción
-            probabilidad = self.xgb_model.predict_proba(X_final)[0][1]
-            
-            # 8. Reglas de Negocio (Explicabilidad)
-            veredicto = "ALTO RIESGO" if probabilidad > 0.5 else "LEGÍTIMO"
-            risk_factors = []
-            
-            if self.explainer:
-                # Calculamos valores SHAP para esta fila
-                shap_values = self.explainer.shap_values(X_final)
-                
-                # Si es clasificación binaria, shap_values puede ser una lista [array_clase0, array_clase1]
-                # o un solo array si es output margin. XGBoost suele dar directo.
-                # Validamos forma:
-                if isinstance(shap_values, list):
-                    # Tomamos la clase 1 (Fraude)
-                    shap_vals_row = shap_values[1][0] 
-                elif len(shap_values.shape) == 2:
-                    shap_vals_row = shap_values[0]
-                else:
-                    shap_vals_row = shap_values
-
-                feature_names = X_final.columns
-                
-                # Creamos lista de tuplas (feature, shap_value)
-                shap_dict = zip(feature_names, shap_vals_row)
-                
-                # Ordenamos por valor absoluto (magnitud de impacto)
-                # O si prefieres solo mostrar por qué es FRAUDE, ordena descendente (los positivos)
-                top_features = sorted(shap_dict, key=lambda x: x[1], reverse=True)[:5] # Top 5 factores que aumentan el riesgo
-
-                for feat_name, shap_val in top_features:
-                    # Filtramos: Solo nos interesa mostrar al usuario lo que AUMENTA el riesgo (shap > 0)
-                    # o si es legítimo, qué lo hace seguro.
-                    # Aquí asumo que queremos explicar el RIESGO:
-                    
-                    impact = "AUMENTA_RIESGO" if shap_val > 0 else "DISMINUYE_RIESGO"
-                    
-                    # Obtener valor original legible
-                    val_original = raw_values.get(feat_name, "N/A")
-                    
-                    # Generar descripción dinámica
-                    desc = f"El valor de '{feat_name}' ({val_original}) impacta el score en {shap_val:.2f}"
-                    
-                    # Caso especial: Descripciones más bonitas para campos conocidos
-                    if feat_name == 'amt' and shap_val > 0:
-                        desc = f"El monto de {val_original} es inusualmente alto para este perfil."
-                    elif feat_name == 'distance_km' and shap_val > 0:
-                        desc = f"La distancia ({val_original} km) indica una ubicación atípica."
-                    elif feat_name == 'hour' and shap_val > 0:
-                        desc = f"La hora de transacción ({val_original}h) es sospechosa."
-
-                    risk_factors.append(RiskFactor(
-                        feature_name=feat_name,
-                        feature_value=str(val_original),
-                        shap_value=float(shap_val),
-                        risk_description=desc,
-                        impact_direction=impact
-                    ))
-
-            # Si no hay explainer o falló, fallback a lista vacía o regla manual simple
-            if not risk_factors and probabilidad > 0.5:
-                 risk_factors.append(RiskFactor(
-                     feature_name="Modelo General",
-                     feature_value="N/A",
-                     shap_value=probabilidad,
-                     risk_description="Patrón general sospechoso detectado por XGBoost",
-                     impact_direction="AUMENTA_RIESGO"
-                 ))
-
-            # Construir Respuesta
-            return FraudOutput(
-                transaction_id=input_data.transaction_id,
-                veredicto=veredicto,
-                score_final=float(probabilidad),
-                detalles_riesgo=risk_factors,
-                datos_auditoria={
-                    "xgboost_score": float(probabilidad),
-                    "iforest_score": float(X['anomaly_score'].iloc[0]),
-                    "base_score": float(self.explainer.expected_value) if hasattr(self.explainer, 'expected_value') else 0.0
-                },
-                recomendacion="Bloquear y Notificar" if veredicto == "ALTO RIESGO" else "Aprobar"
+        # Normalizar género: adaptar códigos de una letra (M/F) al formato
+        # del encoder (male/female). Insensible a mayúsculas.
+        if "gender" in df.columns:
+            df["gender"] = df["gender"].astype(str).str.lower().map(
+                lambda v: _GENDER_NORMALIZE.get(v, v)
             )
 
-        except Exception as e:
-            # En producción, logguear el error real
-            print(f"Error en predicción: {e}")
-            raise e
+        # Encoding de categóricas
+        unknown_fields: dict[str, str] = {}
+        for col in _CATEGORICAL_COLS:
+            encoder = self.encoders[col]
+            values = df[col].astype(str).tolist()
+            encoded = []
+            for val in values:
+                if val in encoder.classes_:
+                    encoded.append(encoder.transform([val])[0])
+                else:
+                    default = encoder.classes_[0]
+                    logger.warning(
+                        "Valor desconocido '%s' en columna '%s'. "
+                        "Mapeando a '%s' para no interrumpir la predicción. "
+                        "Considera actualizar el encoder.",
+                        val, col, default,
+                    )
+                    unknown_fields[col] = val
+                    encoded.append(encoder.transform([default])[0])
+            df[col] = encoded
+
+        return df, raw_values, unknown_fields
+
+    def _build_feature_matrix(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Construye la matriz de features final lista para XGBoost:
+        selección de columnas → scaling → anomaly_score.
+        Usa self.feature_names cacheado en _load_components().
+        """
+        base_cols = [c for c in self.feature_names if c != "anomaly_score"]
+
+        X = df[base_cols].copy().astype(float)
+        X[_COLS_TO_SCALE] = self.scaler.transform(X[_COLS_TO_SCALE])
+        X["anomaly_score"] = self.if_model.decision_function(X[base_cols])
+
+        return X[self.feature_names]
+
+    def _shap_factors(
+        self, X: pd.DataFrame, raw_values: dict
+    ) -> list[RiskFactor]:
+        """
+        Calcula SHAP para UNA fila y devuelve los top-5 factores.
+        Usado en predict() individual. Para batch, usa _build_risk_factors_from_shap().
+        Devuelve lista vacía si el explainer no está disponible o falla.
+        """
+        try:
+            shap_values = self.explainer.shap_values(X)
+
+            if isinstance(shap_values, list):
+                shap_row = shap_values[1][0]
+            elif len(shap_values.shape) == 2:
+                shap_row = shap_values[0]
+            else:
+                shap_row = shap_values
+
+            return self._build_risk_factors_from_shap(
+                X.columns.tolist(), shap_row, raw_values
+            )
+
+        except Exception as exc:
+            logger.warning("Error calculando SHAP: %s", exc)
+            return []
+
+    def _build_risk_factors_from_shap(
+        self,
+        feature_cols: list[str],
+        shap_row: "np.ndarray",
+        raw_values: dict,
+    ) -> list[RiskFactor]:
+        """
+        Formatea un array SHAP pre-calculado en los top-5 RiskFactor.
+        Reutilizado tanto por predict() individual como por predict_batch().
+        """
+        top5 = sorted(
+            zip(feature_cols, shap_row),
+            key=lambda kv: kv[1],
+            reverse=True,
+        )[:5]
+
+        factors = []
+        for feat, shap_val in top5:
+            val_original = raw_values.get(feat, "N/A")
+            impact = "AUMENTA_RIESGO" if shap_val > 0 else "DISMINUYE_RIESGO"
+
+            if feat == "amt" and shap_val > 0:
+                desc = f"El monto de {val_original} es inusualmente alto para este perfil."
+            elif feat == "distance_km" and shap_val > 0:
+                desc = f"La distancia ({val_original} km) indica una ubicación atípica."
+            elif feat == "hour" and shap_val > 0:
+                desc = f"La hora de transacción ({val_original}h) es sospechosa."
+            else:
+                desc = (
+                    f"El valor de '{feat}' ({val_original}) "
+                    f"impacta el score en {shap_val:.2f}."
+                )
+
+            factors.append(RiskFactor(
+                feature_name=feat,
+                feature_value=str(val_original),
+                shap_value=float(shap_val),
+                risk_description=desc,
+                impact_direction=impact,
+            ))
+        return factors

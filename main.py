@@ -1,8 +1,11 @@
 # main.py
+import logging
 import sys
 import os
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from contextlib import asynccontextmanager
+
+logger_main = logging.getLogger("main")
 
 # Herramientas de log y monitoreo
 
@@ -108,13 +111,14 @@ async def startup_event():
     except Exception as e:
         print(f"[STARTUP] Error precargando modelo de morosidad: {e}")
     
-    print("[STARTUP] Precargando modelo de fraude...")
+    logger_main.info("[STARTUP] Inicializando servicio de fraude...")
     try:
-        from fraude.models_files import cargar_modelo as cargar_modelo_fraude
-        cargar_modelo_fraude()
-        print("[STARTUP] Modelo de fraude precargado correctamente")
+        from fraude.service.fraud_service import FraudService
+        app.state.fraud_service = FraudService()
+        logger_main.info("[STARTUP] FraudService inicializado y disponible en app.state")
     except Exception as e:
-        print(f"[STARTUP] Error precargando modelo de fraude: {e}")
+        logger_main.error("[STARTUP] Error inicializando FraudService: %s", e)
+        app.state.fraud_service = None
 
     print("[STARTUP] Precargando modelo de Churn (Fuga)...")
     try:
