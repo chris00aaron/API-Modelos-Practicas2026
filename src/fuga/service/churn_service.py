@@ -10,6 +10,7 @@ class ChurnService:
         self.model = obtener_modelo()
         self.scaler = obtener_scaler()
         self.feature_names = obtener_feature_names()
+        self.model_version = "v1.0.0"  # M8: Updated via hot-reload after training
 
     def preprocess_data(self, input_dict: dict):
         """
@@ -103,7 +104,7 @@ class ChurnService:
                 "risk_level": risk_level,
                 "is_churn": result,
                 "prediction_confidence": round(confidence, 4),
-                "model_version": "v1.0.0",
+                "model_version": self.model_version,  # M8: Dynamic version from hot-reload
                 "risk_factors": risk_factors,
                 "real_exit": is_real_exit # Devolvemos la realidad para validación
             }
@@ -115,10 +116,27 @@ class ChurnService:
 
     def generate_explanations(self, data: dict, probability: float):
         """
-        Genera factores de riesgo basados en la lógica del negocio y el modelo.
+        Genera factores de riesgo escalados por feature_importances_ reales del modelo (M5).
         Evalúa las 10 variables del modelo XGBoost para dar una explicación completa.
         Retorna una lista de objetos {feature, impact, type}.
         """
+        # M5: Obtener importancias reales del modelo para escalar impactos
+        feature_importances = {}
+        if self.model and self.feature_names:
+            try:
+                fi = self.model.feature_importances_
+                for fname, fimport in zip(self.feature_names, fi):
+                    feature_importances[fname] = float(fimport)
+            except Exception:
+                pass  # Si falla, usamos impactos base sin escalar
+        
+        def scale_impact(base_impact: float, feature_key: str) -> int:
+            """Escala el impacto base según la importancia real del feature en el modelo."""
+            importance = feature_importances.get(feature_key, 0.1)
+            # El multiplicador va de 0.5x a 3x según importancia (0.0 a 0.3+)
+            multiplier = 0.5 + importance * 8.0
+            return round(base_impact * multiplier)
+        
         factors = []
 
         # 1. Edad (Suele ser factor de riesgo si es mayor de 40)
@@ -126,19 +144,19 @@ class ChurnService:
         if age > 45:
             factors.append({
                 "feature": f"Edad Avanzada ({age} años)",
-                "impact": 30, 
+                "impact": scale_impact(30, 'Age'), 
                 "type": "negative"
             })
         elif age > 35:
             factors.append({
                 "feature": f"Edad Media ({age} años)",
-                "impact": 10,
+                "impact": scale_impact(10, 'Age'),
                 "type": "negative"
             })
         elif age < 30:
             factors.append({
                 "feature": f"Edad Joven ({age} años)",
-                "impact": -15, 
+                "impact": scale_impact(-15, 'Age'), 
                 "type": "positive"
             })
 
@@ -147,13 +165,13 @@ class ChurnService:
         if active == 1:
             factors.append({
                 "feature": "Cliente Activo",
-                "impact": -25,
+                "impact": scale_impact(-25, 'IsActiveMember'),
                 "type": "positive"
             })
         else:
             factors.append({
                 "feature": "Cliente Inactivo",
-                "impact": 20,
+                "impact": scale_impact(20, 'IsActiveMember'),
                 "type": "negative"
             })
 
@@ -162,25 +180,25 @@ class ChurnService:
         if balance > 150000:
             factors.append({
                 "feature": f"Balance Muy Alto (${balance:,.0f})",
-                "impact": 25,
+                "impact": scale_impact(25, 'Balance'),
                 "type": "negative"
             })
         elif balance > 100000:
              factors.append({
                 "feature": f"Balance Alto (${balance:,.0f})",
-                "impact": 15,
+                "impact": scale_impact(15, 'Balance'),
                 "type": "negative"
             })
         elif balance == 0:
              factors.append({
                 "feature": "Saldo Cero",
-                "impact": 10,
+                "impact": scale_impact(10, 'Balance'),
                 "type": "negative"
             })
         elif balance > 50000:
             factors.append({
                 "feature": f"Balance Saludable (${balance:,.0f})",
-                "impact": -10,
+                "impact": scale_impact(-10, 'Balance'),
                 "type": "positive"
             })
 
@@ -189,19 +207,19 @@ class ChurnService:
         if products >= 3:
             factors.append({
                 "feature": f"Exceso de Productos ({products})",
-                "impact": 40,
+                "impact": scale_impact(40, 'NumOfProducts'),
                 "type": "negative"
             })
         elif products == 2:
             factors.append({
                 "feature": "Vinculación Óptima (2 productos)",
-                "impact": -20,
+                "impact": scale_impact(-20, 'NumOfProducts'),
                 "type": "positive"
             })
         elif products == 1:
             factors.append({
                 "feature": "Baja Vinculación (1 producto)",
-                "impact": 10,
+                "impact": scale_impact(10, 'NumOfProducts'),
                 "type": "negative"
             })
 
@@ -210,19 +228,19 @@ class ChurnService:
         if score < 450:
             factors.append({
                 "feature": f"Score Crediticio Muy Bajo ({score})",
-                "impact": 35,
+                "impact": scale_impact(35, 'CreditScore'),
                 "type": "negative"
             })
         elif score < 550:
             factors.append({
                 "feature": f"Score Crediticio Bajo ({score})",
-                "impact": 20,
+                "impact": scale_impact(20, 'CreditScore'),
                 "type": "negative"
             })
         elif score > 750:
             factors.append({
                 "feature": f"Score Crediticio Excelente ({score})",
-                "impact": -15,
+                "impact": scale_impact(-15, 'CreditScore'),
                 "type": "positive"
             })
 
@@ -231,19 +249,19 @@ class ChurnService:
         if geography in ('Germany', 'Alemania'):
             factors.append({
                 "feature": f"Geografía de Riesgo ({geography})",
-                "impact": 25,
+                "impact": scale_impact(25, 'Geography_Germany'),
                 "type": "negative"
             })
         elif geography in ('France', 'Francia'):
             factors.append({
                 "feature": f"Geografía Estable ({geography})",
-                "impact": -10,
+                "impact": scale_impact(-10, 'Geography_Germany'),
                 "type": "positive"
             })
         elif geography in ('Spain', 'España'):
             factors.append({
                 "feature": f"Geografía Favorable ({geography})",
-                "impact": -12,
+                "impact": scale_impact(-12, 'Geography_Spain'),
                 "type": "positive"
             })
 
@@ -252,13 +270,13 @@ class ChurnService:
         if gender == 'Female':
             factors.append({
                 "feature": "Género Femenino (mayor riesgo histórico)",
-                "impact": 15,
+                "impact": scale_impact(15, 'Gender'),
                 "type": "negative"
             })
         elif gender == 'Male':
             factors.append({
                 "feature": "Género Masculino (menor riesgo histórico)",
-                "impact": -8,
+                "impact": scale_impact(-8, 'Gender'),
                 "type": "positive"
             })
 
@@ -267,19 +285,19 @@ class ChurnService:
         if tenure <= 1:
             factors.append({
                 "feature": f"Cliente Nuevo ({tenure} año{'s' if tenure != 1 else ''})",
-                "impact": 20,
+                "impact": scale_impact(20, 'Tenure'),
                 "type": "negative"
             })
         elif tenure <= 3:
             factors.append({
                 "feature": f"Baja Antigüedad ({tenure} años)",
-                "impact": 10,
+                "impact": scale_impact(10, 'Tenure'),
                 "type": "negative"
             })
         elif tenure >= 8:
             factors.append({
                 "feature": f"Alta Fidelización ({tenure} años)",
-                "impact": -18,
+                "impact": scale_impact(-18, 'Tenure'),
                 "type": "positive"
             })
 
@@ -288,7 +306,7 @@ class ChurnService:
         if has_card == 0:
             factors.append({
                 "feature": "Sin Tarjeta de Crédito",
-                "impact": 12,
+                "impact": scale_impact(12, 'HasCrCard'),
                 "type": "negative"
             })
 
@@ -297,13 +315,13 @@ class ChurnService:
         if salary < 30000:
             factors.append({
                 "feature": f"Salario Bajo (${salary:,.0f})",
-                "impact": 15,
+                "impact": scale_impact(15, 'EstimatedSalary'),
                 "type": "negative"
             })
         elif salary > 150000:
             factors.append({
                 "feature": f"Salario Alto (${salary:,.0f})",
-                "impact": -10,
+                "impact": scale_impact(-10, 'EstimatedSalary'),
                 "type": "positive"
             })
 
