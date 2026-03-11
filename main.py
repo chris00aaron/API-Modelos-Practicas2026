@@ -2,14 +2,10 @@
 import logging
 import sys
 import os
-<<<<<<< Updated upstream
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from contextlib import asynccontextmanager
 
 logger_main = logging.getLogger("main")
-=======
-from fastapi import FastAPI
->>>>>>> Stashed changes
 
 # Herramientas de log y monitoreo
 
@@ -39,7 +35,7 @@ def _setup_churn_monitor():
     """Configura el scheduler para el monitor de rendimiento de Churn."""
     global _scheduler
     try:
-        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.schedulers.background import BackgroundScheduler # type: ignore
         from fuga.service.performance_monitor import (
             performance_monitor,
             MONITOR_ENABLED,
