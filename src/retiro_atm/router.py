@@ -1,7 +1,7 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from fastapi.concurrency import run_in_threadpool
-from retiro_atm.schema.input_retiro_atm import InputDataRetiroAtm
-from retiro_atm.schema.output_retiro_atm import OutputDataRetiroAtm
+from retiro_atm.schema.input_retiro_atm import InputDataRetiroAtm, InputDataRetiroAtmExtraporaneo
+from retiro_atm.schema.output_retiro_atm import OutputDataRetiroAtm, OutputDataRetiroAtmExtraporanea
 from retiro_atm.service.service_prediction_retiro_atm import ServicioPrediccionRetiroAtm
 from retiro_atm.service.atm_model_provider import ModeloActualizandoseError
 import sys
@@ -56,4 +56,36 @@ async def predecir_retiro(
     
     except Exception as e:
         logger.error(f"Error en predecir_retiro_lote: {e}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
+    
+    
+@router.post("/v1/withdrawal/off-time", tags=["Predicción del Retiro de Efectivo en ATM Extraporáneo"])
+async def predecir_retiro_extraporaneo(
+    input_data: list[InputDataRetiroAtmExtraporaneo]
+) -> list[OutputDataRetiroAtmExtraporanea]:
+    try:
+        for i in input_data:
+            print(f"{i}")
+
+        return await run_in_threadpool(
+            servicioPrediccionRetiro.predecir_retiro_lote_extraporaneo,
+            input_data
+        )
+    except ModeloActualizandoseError as e:
+        logger.warning(f"Modelo en actualización => {e}")
+        raise HTTPException(status_code=503, detail="El modelo está siendo actualizado. Por favor, intente nuevamente más tarde.")
+    
+    except Exception as e:
+        logger.error(f"Error en predecir_retiro_lote: {e}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
+    
+
+@router.post("/v1/withdrawal/update", tags=["Actualización del Modelo"])
+async def actualizar_modelo_atm(background_tasks: BackgroundTasks):
+    " Endpoint para actualizar el modelo predictivo desde DagsHub."
+    try:
+        background_tasks.add_task(servicioPrediccionRetiro.provider.recargar_modelo)
+        return {"mensaje": "Actualización iniciada. El nuevo modelo estará disponible en unos momentos."}
+    except Exception as e:
+        logger.error(f"Error en actualizar modelo: {e}")
         raise HTTPException(status_code=500, detail="Error interno del servidor")

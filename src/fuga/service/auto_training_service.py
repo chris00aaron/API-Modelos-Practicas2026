@@ -178,11 +178,17 @@ class AutoTrainingService:
             X_train_scaled = scaler.fit_transform(X_train)
             X_test_scaled = scaler.transform(X_test)
 
-            # 5. Entrenar modelo (independiente de MLflow)
+            # 5. Entrenar modelo con scale_pos_weight dinámico (M4)
+            neg = (y_train == 0).sum()
+            pos = (y_train == 1).sum()
+            scale_pos_weight = neg / pos if pos > 0 else 1.0
+            logger.info(f"Class balance: {neg} neg / {pos} pos → scale_pos_weight={scale_pos_weight:.2f}")
+
             model = XGBClassifier(
                 n_estimators=100,
                 learning_rate=0.1,
                 max_depth=5,
+                scale_pos_weight=scale_pos_weight,
                 random_state=42,
                 use_label_encoder=False,
                 eval_metric='logloss'
@@ -218,6 +224,7 @@ class AutoTrainingService:
                     mlflow.log_param("max_depth", 5)
                     mlflow.log_param("train_samples", len(X_train))
                     mlflow.log_param("test_samples", len(X_test))
+                    mlflow.log_param("scale_pos_weight", round(scale_pos_weight, 2))
                     mlflow.log_param("version_tag", version_tag)
                     mlflow.log_metric("accuracy", acc)
                     mlflow.log_metric("f1_score", f1)
@@ -259,7 +266,8 @@ class AutoTrainingService:
                 _cs.model = model
                 _cs.scaler = scaler
                 _cs.feature_names = feature_names
-                logger.info("ChurnService actualizado con el nuevo modelo.")
+                _cs.model_version = version_tag  # M8: Propagate version to predictions
+                logger.info(f"ChurnService actualizado con el nuevo modelo (version: {version_tag}).")
             except Exception as e_reload:
                 logger.warning(f"No se pudo actualizar ChurnService en caliente: {e_reload}")
 
