@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # Configuración DagsHub
 DAGSHUB_REPO_OWNER = "notificacionesbankmind"
 DAGSHUB_REPO_NAME = "Modelos_BankMind_2026"
-DAGSHUB_MODEL_PATH = "modelos/morosidad/modelo.pkl"
+DAGSHUB_MODEL_PATH = "modelos/morosidad/modelo_morosidad_produccion_final_.pkl"
 
 # Token de DagsHub (desde variable de entorno)
 DAGSHUB_TOKEN = os.environ.get("DAGSHUB_USER_TOKEN")
