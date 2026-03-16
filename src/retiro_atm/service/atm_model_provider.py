@@ -65,9 +65,9 @@ class AtmModelProvider:
 
     def _descargar_desde_dagshub(self) -> Optional[Any]:
         """Lógica interna de descarga (sin acceso a disco)."""
-        repo_owner = "notificacionesbankmind"
-        repo_name = "Modelos_BankMind_2026"
-        model_path = "modelos/atm/modelo_producción.pkl"
+        repo_owner = os.environ.get("DAGSHUB_REPO_OWNER", "notificacionesbankmind")
+        repo_name = os.environ.get("DAGSHUB_REPO_NAME", "Modelos_BankMind_2026")
+        model_path = os.environ.get("DAGSHUB_MODEL_ATM_PATH", "modelos/atm/modelo_producción.pkl")
         token = os.environ.get("DAGSHUB_USER_TOKEN")
         
         # Inicializar DagsHub

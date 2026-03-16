@@ -22,7 +22,10 @@ except Exception as e:
     sys.exit(1)
 
 #Codigo base
-@router.post("/predecir",tags=["Predicción del Retiro de Efectivo en ATM"])
+@router.post("/predecir",
+    summary="Predecir el monto ha retirar en un solo dia en un ATM.",
+    description="Endpoint para predecir el monto ha retirar en un solo dia en un ATM."
+)
 async def predecir_temperatura(input_data: InputDataRetiroAtm ) -> OutputDataRetiroAtm:
     """
     Endpoint para predecir el monto ha retirar en un solo dia en un ATM.
@@ -38,7 +41,9 @@ async def predecir_temperatura(input_data: InputDataRetiroAtm ) -> OutputDataRet
         raise HTTPException(status_code=500, detail="Error interno del servidor")
 
 
-@router.post("/v1/withdrawal", tags=["Predicción del Retiro de Efectivo en ATM"])
+@router.post("/v1/withdrawal",
+    summary="Predecir el monto ha retirar en un solo dia en un ATM.",
+    description="Endpoint para predecir el monto ha retirar en un solo dia en un ATM.")
 async def predecir_retiro(
     input_data: list[InputDataRetiroAtm]
 ) -> list[OutputDataRetiroAtm]:
@@ -59,7 +64,9 @@ async def predecir_retiro(
         raise HTTPException(status_code=500, detail="Error interno del servidor")
     
     
-@router.post("/v1/withdrawal/off-time", tags=["Predicción del Retiro de Efectivo en ATM Extraporáneo"])
+@router.post("/v1/withdrawal/off-time",
+    summary="Predecir el monto ha retirar en un solo dia en un ATM.",
+    description="Endpoint para predecir el monto ha retirar en un solo dia en un ATM.")
 async def predecir_retiro_extraporaneo(
     input_data: list[InputDataRetiroAtmExtraporaneo]
 ) -> list[OutputDataRetiroAtmExtraporanea]:
@@ -80,12 +87,23 @@ async def predecir_retiro_extraporaneo(
         raise HTTPException(status_code=500, detail="Error interno del servidor")
     
 
-@router.post("/v1/withdrawal/update", tags=["Actualización del Modelo"])
+@router.post("/v1/withdrawal/update",
+    summary="Actualizar el modelo predictivo desde DagsHub.",
+    description="Endpoint para actualizar el modelo predictivo desde DagsHub.")
 async def actualizar_modelo_atm(background_tasks: BackgroundTasks):
-    " Endpoint para actualizar el modelo predictivo desde DagsHub."
     try:
         background_tasks.add_task(servicioPrediccionRetiro.provider.recargar_modelo)
         return {"mensaje": "Actualización iniciada. El nuevo modelo estará disponible en unos momentos."}
     except Exception as e:
         logger.error(f"Error en actualizar modelo: {e}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
+
+@router.get("/v1/withdrawal/info",
+    summary="Obtener información del modelo predictivo.",
+    description="Endpoint para obtener información del modelo predictivo.")
+async def obtener_info_modelo():
+    try:
+        return servicioPrediccionRetiro.provider.info_modelo()
+    except Exception as e:
+        logger.error(f"Error en obtener información del modelo: {e}")
         raise HTTPException(status_code=500, detail="Error interno del servidor")
