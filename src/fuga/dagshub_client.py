@@ -25,7 +25,7 @@ import dagshub
 import mlflow
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(encoding='latin-1')
 
 logger = logging.getLogger(__name__)
 

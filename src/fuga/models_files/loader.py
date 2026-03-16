@@ -18,7 +18,7 @@ import mlflow
 from dotenv import load_dotenv
 
 # Cargar variables de entorno desde .env
-load_dotenv()
+load_dotenv(encoding='latin-1')
 
 logger = logging.getLogger(__name__)
 
