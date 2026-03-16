@@ -103,7 +103,7 @@ async def actualizar_modelo_atm(background_tasks: BackgroundTasks):
     description="Endpoint para obtener información del modelo predictivo.")
 async def obtener_info_modelo():
     try:
-        return servicioPrediccionRetiro.provider.info_modelo()
+        return servicioPrediccionRetiro.provider.info_modelo
     except Exception as e:
         logger.error(f"Error en obtener información del modelo: {e}")
         raise HTTPException(status_code=500, detail="Error interno del servidor")
