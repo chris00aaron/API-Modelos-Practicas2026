@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 _REPO_OWNER = "notificacionesbankmind"
 _REPO_NAME = "Modelos_BankMind_2026"
-_MODEL_PATH = "modelos/fraude/modelo.pkl" # Modelo inicial: modelo_producción.pkl 
+_MODEL_PATH = "modelos/fraude/modelo.pkl"
 _BRANCHES = ["main", "master"]
 
 # Timeout para HTTP: (connect_timeout, read_timeout) en segundos
