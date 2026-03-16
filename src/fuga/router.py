@@ -70,6 +70,7 @@ def trigger_evaluation():
     Dispara manualmente una evaluación del rendimiento del modelo.
     Compara predicciones históricas contra ground truth (account_details.exited).
     Si el Recall cae por debajo del umbral, dispara re-entrenamiento automático.
+    Devuelve el estado completo del monitor (mismo formato que GET /monitor/status).
     """
     try:
         result = performance_monitor.evaluate_model_performance()
@@ -78,7 +79,8 @@ def trigger_evaluation():
         if result.get("status") == "degraded":
             performance_monitor._trigger_auto_retrain(result)
 
-        return result
+        # Devolver el estado completo (incluye maturation_days, monitor_enabled, etc.)
+        return performance_monitor.get_status()
     except Exception as e:
         raise HTTPException(
             status_code=500,

@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 # CONFIGURACIÓN (desde variables de entorno)
 # ============================================================
 RECALL_THRESHOLD = float(os.environ.get("CHURN_RECALL_THRESHOLD", "0.75"))
-MIN_FEEDBACK_SAMPLES = int(os.environ.get("CHURN_MIN_FEEDBACK_SAMPLES", "50"))
-MATURATION_DAYS = int(os.environ.get("CHURN_MATURATION_DAYS", "30"))
+MIN_FEEDBACK_SAMPLES = int(os.environ.get("CHURN_MIN_FEEDBACK_SAMPLES", "10"))
+MATURATION_DAYS = int(os.environ.get("CHURN_MATURATION_DAYS", "1"))
 MONITOR_INTERVAL_HOURS = int(os.environ.get("CHURN_MONITOR_INTERVAL_HOURS", "6"))
 MONITOR_ENABLED = os.environ.get("CHURN_MONITOR_ENABLED", "true").lower() == "true"
 
@@ -80,6 +80,7 @@ class PerformanceMonitorService:
                     "evaluated_samples": 0,
                     "min_samples_required": MIN_FEEDBACK_SAMPLES,
                     "recall_threshold": RECALL_THRESHOLD,
+                    "maturation_days": MATURATION_DAYS,
                     "auto_training_triggered": False,
                 }
                 self._update_state(result)
@@ -98,6 +99,7 @@ class PerformanceMonitorService:
                     "evaluated_samples": total_samples,
                     "min_samples_required": MIN_FEEDBACK_SAMPLES,
                     "recall_threshold": RECALL_THRESHOLD,
+                    "maturation_days": MATURATION_DAYS,
                     "auto_training_triggered": False,
                 }
                 self._update_state(result)
