@@ -32,12 +32,12 @@ logger = logging.getLogger(__name__)
 # Configuración DagsHub
 DAGSHUB_REPO_OWNER = os.getenv("DAGSHUB_REPO_OWNER", "notificacionesbankmind")
 DAGSHUB_REPO_NAME = os.getenv("DAGSHUB_REPO_NAME", "Modelos_BankMind_2026")
-DAGSHUB_CHURN_MODEL_PATH = "modelos/fuga/modelos_produccion/churn_champion.pkl"
+DAGSHUB_CHURN_MODEL_PATH = os.getenv("DAGSHUB_MODEL_FUGA_PATH", "modelos/fuga/modelos_produccion/churn_champion.pkl")
 
 # Rutas legacy (3 archivos separados — fallback para loader.py)
-DAGSHUB_LEGACY_MODEL_PATH = "modelos/fuga/modelos_produccion/best_model_churn.pkl"
-DAGSHUB_LEGACY_SCALER_PATH = "modelos/fuga/modelos_produccion/scaler.pkl"
-DAGSHUB_LEGACY_FEATURES_PATH = "modelos/fuga/modelos_produccion/feature_names.pkl"
+DAGSHUB_LEGACY_MODEL_PATH = os.getenv("DAGSHUB_MODEL_FUGA_LEGACY_PATH", "modelos/fuga/modelos_produccion/best_model_churn.pkl")
+DAGSHUB_LEGACY_SCALER_PATH = os.getenv("DAGSHUB_MODEL_FUGA_SCALER_PATH", "modelos/fuga/modelos_produccion/scaler.pkl")
+DAGSHUB_LEGACY_FEATURES_PATH = os.getenv("DAGSHUB_MODEL_FUGA_FEATURES_PATH", "modelos/fuga/modelos_produccion/feature_names.pkl")
 
 DAGSHUB_TOKEN = os.getenv("DAGSHUB_USER_TOKEN")
 

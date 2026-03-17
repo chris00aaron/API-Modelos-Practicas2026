@@ -29,12 +29,12 @@ DAGSHUB_REPO_OWNER = "notificacionesbankmind"
 DAGSHUB_REPO_NAME = "Modelos_BankMind_2026"
 
 # Ruta del combo-pack (nuevo formato)
-DAGSHUB_COMBO_PATH = "modelos/fuga/modelos_produccion/churn_champion.pkl"
+DAGSHUB_COMBO_PATH = os.environ.get("DAGSHUB_MODEL_FUGA_PATH", "modelos/fuga/modelos_produccion/churn_champion.pkl")
 
 # Rutas legacy (3 archivos separados - fallback)
-DAGSHUB_MODEL_PATH = "modelos/fuga/modelos_produccion/best_model_churn.pkl"
-DAGSHUB_SCALER_PATH = "modelos/fuga/modelos_produccion/scaler.pkl"
-DAGSHUB_FEATURES_PATH = "modelos/fuga/modelos_produccion/feature_names.pkl"
+DAGSHUB_MODEL_PATH = os.environ.get("DAGSHUB_MODEL_FUGA_LEGACY_PATH", "modelos/fuga/modelos_produccion/best_model_churn.pkl")
+DAGSHUB_SCALER_PATH = os.environ.get("DAGSHUB_MODEL_FUGA_SCALER_PATH", "modelos/fuga/modelos_produccion/scaler.pkl")
+DAGSHUB_FEATURES_PATH = os.environ.get("DAGSHUB_MODEL_FUGA_FEATURES_PATH", "modelos/fuga/modelos_produccion/feature_names.pkl")
 
 # Token de DagsHub (desde variable de entorno)
 DAGSHUB_TOKEN = os.environ.get("DAGSHUB_USER_TOKEN")
