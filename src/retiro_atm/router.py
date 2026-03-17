@@ -1,13 +1,13 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from fastapi.concurrency import run_in_threadpool
-from retiro_atm.schema.input_retiro_atm import InputDataRetiroAtm, InputDataRetiroAtmExtraporaneo
-from retiro_atm.schema.output_retiro_atm import OutputDataRetiroAtm, OutputDataRetiroAtmExtraporanea
-from retiro_atm.service.service_prediction_retiro_atm import ServicioPrediccionRetiroAtm
-from retiro_atm.service.atm_model_provider import ModeloActualizandoseError
+from .schema.input_retiro_atm import InputDataRetiroAtm, InputDataRetiroAtmExtraporaneo
+from .schema.output_retiro_atm import OutputDataRetiroAtm, OutputDataRetiroAtmExtraporanea
+from .service.service_prediction_retiro_atm import ServicioPrediccionRetiroAtm
+from .service.atm_model_provider import ModeloActualizandoseError
 import sys
 import logging
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("retiro_atm")
 
 router = APIRouter(
     prefix="/api/atm",
@@ -16,6 +16,7 @@ router = APIRouter(
 
 # Instanciamos el servicio una única vez al cargar el módulo
 try:
+    print("Iniciando servicio de predicción de retiros...")
     servicioPrediccionRetiro = ServicioPrediccionRetiroAtm()
 except Exception as e:
     logger.error(f"CRITICAL ERROR: No se pudo inicializar el servicio de predicción de retiros: {e}")
@@ -103,6 +104,7 @@ async def actualizar_modelo_atm(background_tasks: BackgroundTasks):
     description="Endpoint para obtener información del modelo predictivo.")
 async def obtener_info_modelo():
     try:
+        print(servicioPrediccionRetiro.provider.info_modelo)
         return servicioPrediccionRetiro.provider.info_modelo
     except Exception as e:
         logger.error(f"Error en obtener información del modelo: {e}")
