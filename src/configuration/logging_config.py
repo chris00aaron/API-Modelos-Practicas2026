@@ -1,7 +1,7 @@
 from logging.config import dictConfig
 from pathlib import Path
 
-LOG_DIR = Path("logs")
+LOG_DIR = Path("API-Modelos-Practicas2026/logs")
 LOG_DIR.mkdir(exist_ok=True)
 
 LOGGING_CONFIG = {
@@ -33,25 +33,6 @@ LOGGING_CONFIG = {
             "backupCount": 3,
             "formatter": "default",
         },
-        # Handlers específicos
-        "file_fraude": {
-            "class": "logging.handlers.RotatingFileHandler",
-            "filename": str(LOG_DIR / "fraude.log"),
-            "maxBytes": 5_000_000,
-            "formatter": "default",
-        },
-        "file_fuga": {
-            "class": "logging.handlers.RotatingFileHandler",
-            "filename": str(LOG_DIR / "fuga.log"),
-            "maxBytes": 5_000_000,
-            "formatter": "default",
-        },
-        "file_morosidad": {
-            "class": "logging.handlers.RotatingFileHandler",
-            "filename": str(LOG_DIR / "morosidad.log"),
-            "maxBytes": 5_000_000,
-            "formatter": "default",
-        },
         "file_retiro_atm": {
             "class": "logging.handlers.RotatingFileHandler",
             "filename": str(LOG_DIR / "retiro_atm.log"),
@@ -60,21 +41,6 @@ LOGGING_CONFIG = {
         },
     },
     "loggers": {
-        "fraude": {
-            "handlers": ["file_fraude", "file_errors"], 
-            "level": "INFO", 
-            "propagate": False
-        },
-        "fuga": {
-            "handlers": ["file_fuga", "file_errors"], 
-            "level": "INFO", 
-            "propagate": False
-        },
-        "morosidad": {
-            "handlers": ["file_morosidad", "file_errors"], 
-            "level": "INFO", 
-            "propagate": False
-        },
         "retiro_atm": {
             "handlers": ["file_retiro_atm", "file_errors"], 
             "level": "INFO", 
