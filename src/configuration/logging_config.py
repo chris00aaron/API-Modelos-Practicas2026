@@ -40,43 +40,10 @@ LOGGING_CONFIG = {
             "maxBytes": 5_000_000,
             "formatter": "default",
         },
-        "file_fuga": {
-            "class": "logging.handlers.RotatingFileHandler",
-            "filename": str(LOG_DIR / "fuga.log"),
-            "maxBytes": 5_000_000,
-            "formatter": "default",
-        },
-        "file_morosidad": {
-            "class": "logging.handlers.RotatingFileHandler",
-            "filename": str(LOG_DIR / "morosidad.log"),
-            "maxBytes": 5_000_000,
-            "formatter": "default",
-        },
-        "file_retiro_atm": {
-            "class": "logging.handlers.RotatingFileHandler",
-            "filename": str(LOG_DIR / "retiro_atm.log"),
-            "maxBytes": 5_000_000,
-            "formatter": "default",
-        },
     },
     "loggers": {
         "fraude": {
             "handlers": ["file_fraude", "file_errors"], 
-            "level": "INFO", 
-            "propagate": False
-        },
-        "fuga": {
-            "handlers": ["file_fuga", "file_errors"], 
-            "level": "INFO", 
-            "propagate": False
-        },
-        "morosidad": {
-            "handlers": ["file_morosidad", "file_errors"], 
-            "level": "INFO", 
-            "propagate": False
-        },
-        "retiro_atm": {
-            "handlers": ["file_retiro_atm", "file_errors"], 
             "level": "INFO", 
             "propagate": False
         },
