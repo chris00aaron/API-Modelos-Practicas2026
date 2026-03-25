@@ -1,36 +1,29 @@
-# --- Core Web Framework ---
+# ── API-Modelos-Practicas2026 – Requirements VERIFICADOS ─────────────────────
+# Solo librerías efectivamente importadas en src/fraude/
+
+# --- Web Framework ---
 fastapi==0.121.1
 uvicorn==0.38.0
 pydantic==2.12.4
 pydantic_core==2.41.5
 python-multipart==0.0.22
 
-# --- Data Science ---
+# --- Data Science (usados en fraud_service.py) ---
 numpy==2.2.6
 pandas==2.3.3
-scikit-learn==1.7.2
-scipy==1.15.3
 joblib==1.5.2
+python-dateutil==2.9.0.post0
 
-# --- ML Models ---
+# --- ML Model (usados internamente en joblib.load del .pkl) ---
 xgboost==3.2.0
-lightgbm==4.6.0
-shap==0.51.0
-optuna==4.7.0
+scikit-learn==1.7.2
+shap==0.46.0
 
-# --- MLOps (DagsHub + MLflow) ---
+# --- MLOps (usados en loader.py para descargar modelos de DagsHub) ---
 dagshub==0.6.8
 mlflow==3.10.1
 
-# --- Database ---
-psycopg2==2.9.11
-sqlalchemy==2.0.48
-psycopg2-binary==2.9.11
-
 # --- Utilities ---
 python-dotenv==1.2.1
-python-dateutil==2.9.0.post0
 requests==2.32.5
-tqdm==4.67.1
 filelock==3.20.1
-apscheduler==3.11.2
