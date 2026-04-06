@@ -1,7 +1,7 @@
 from logging.config import dictConfig
 from pathlib import Path
 
-LOG_DIR = Path("logs")
+LOG_DIR = Path('logs')
 LOG_DIR.mkdir(exist_ok=True)
 
 LOGGING_CONFIG = {
@@ -25,6 +25,7 @@ LOGGING_CONFIG = {
             "maxBytes": 5_000_000,
             "backupCount": 5,
             "formatter": "default",
+            "encoding": "utf-8"
         },
         "file_general": {
             "class": "logging.handlers.RotatingFileHandler",
@@ -32,6 +33,7 @@ LOGGING_CONFIG = {
             "maxBytes": 5_000_000,
             "backupCount": 3,
             "formatter": "default",
+            "encoding": "utf-8"
         },
         # Handlers específicos
         "file_fraude": {
@@ -39,24 +41,28 @@ LOGGING_CONFIG = {
             "filename": str(LOG_DIR / "fraude.log"),
             "maxBytes": 5_000_000,
             "formatter": "default",
+            "encoding": "utf-8"
         },
         "file_fuga": {
             "class": "logging.handlers.RotatingFileHandler",
             "filename": str(LOG_DIR / "fuga.log"),
             "maxBytes": 5_000_000,
             "formatter": "default",
+            "encoding": "utf-8"
         },
         "file_morosidad": {
             "class": "logging.handlers.RotatingFileHandler",
             "filename": str(LOG_DIR / "morosidad.log"),
             "maxBytes": 5_000_000,
             "formatter": "default",
+            "encoding": "utf-8"
         },
         "file_retiro_atm": {
             "class": "logging.handlers.RotatingFileHandler",
             "filename": str(LOG_DIR / "retiro_atm.log"),
             "maxBytes": 5_000_000,
             "formatter": "default",
+            "encoding": "utf-8"
         },
     },
     "loggers": {
