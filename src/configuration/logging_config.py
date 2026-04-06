@@ -1,7 +1,7 @@
 from logging.config import dictConfig
 from pathlib import Path
 
-LOG_DIR = Path("API-Modelos-Practicas2026/logs")
+LOG_DIR = Path('./logs')
 LOG_DIR.mkdir(exist_ok=True)
 
 LOGGING_CONFIG = {

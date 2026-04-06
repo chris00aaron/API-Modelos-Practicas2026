@@ -2,8 +2,7 @@
 import logging
 import sys
 import os
-from fastapi import BackgroundTasks, FastAPI, HTTPException
-from contextlib import asynccontextmanager
+from fastapi import FastAPI
 
 logger_main = logging.getLogger("main")
 
