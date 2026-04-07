@@ -2,6 +2,16 @@
 import logging
 import sys
 import os
+
+# ── Force UTF-8 on Windows ──────────────────────────────────────────────
+# Windows cmd.exe uses cp1252 by default, which crashes on Unicode emojis
+# (✅, ⚠️, ❌, etc.) used in log messages throughout the codebase.
+# Reconfigure stdout/stderr to use UTF-8 with error replacement.
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+# ─────────────────────────────────────────────────────────────────────────
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from contextlib import asynccontextmanager
 
@@ -58,17 +68,17 @@ def _setup_churn_monitor():
         )
         _scheduler.start()
         print(
-            f"[CHURN MONITOR] ✅ Scheduler iniciado. "
-            f"Evaluación cada {MONITOR_INTERVAL_HOURS} horas."
+            f"[CHURN MONITOR] [OK] Scheduler iniciado. "
+            f"Evaluacion cada {MONITOR_INTERVAL_HOURS} horas."
         )
     except ImportError:
         print(
-            "[CHURN MONITOR] ⚠️ APScheduler no instalado. "
-            "El monitor automático NO está activo. "
+            "[CHURN MONITOR] [WARN] APScheduler no instalado. "
+            "El monitor automatico NO esta activo. "
             "Instala con: pip install apscheduler"
         )
     except Exception as e:
-        print(f"[CHURN MONITOR] ❌ Error iniciando scheduler: {e}")
+        print(f"[CHURN MONITOR] [ERROR] Error iniciando scheduler: {e}")
 
 
 def _shutdown_churn_monitor():
@@ -134,14 +144,15 @@ async def startup_event():
         from fuga import dagshub_client as churn_dagshub
         token_info = churn_dagshub.check_token_permissions()
         for msg in token_info.get('messages', []):
-            print(f"[STARTUP] [CHURN TOKEN] {msg}")
+            safe_msg = msg.encode('ascii', errors='replace').decode('ascii')
+            print(f"[STARTUP] [CHURN TOKEN] {safe_msg}")
         if not token_info.get('write'):
             print(
-                "[STARTUP] ⚠️ CHURN: El token DagsHub NO tiene permisos de escritura. "
-                "El reentrenamiento NO podrá subir modelos a DagsHub."
+                "[STARTUP] [WARN] CHURN: El token DagsHub NO tiene permisos de escritura. "
+                "El reentrenamiento NO podra subir modelos a DagsHub."
             )
     except Exception as e:
-        print(f"[STARTUP] ⚠️ No se pudo verificar token DagsHub: {e}")
+        print(f"[STARTUP] [WARN] No se pudo verificar token DagsHub: {e}")
 
     # Iniciar monitor de rendimiento de Churn
     print("[STARTUP] Iniciando monitor de rendimiento de Churn...")
