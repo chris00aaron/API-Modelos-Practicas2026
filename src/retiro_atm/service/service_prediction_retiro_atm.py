@@ -2,9 +2,9 @@ import numpy as np
 import logging
 
 from .atm_model_provider import AtmModelProvider
-from src.retiro_atm.schema import InputDataRetiroAtm,InputDataRetiroAtmExtraporaneo,OutputDataRetiroAtm,OutputDataRetiroAtmExtraporanea
+from ..schema import InputDataRetiroAtm, InputDataRetiroAtmExtraporaneo, OutputDataRetiroAtm, OutputDataRetiroAtmExtraporanea
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("retiro_atm")
 
 class ServicioPrediccionRetiroAtm:
     def __init__(self):

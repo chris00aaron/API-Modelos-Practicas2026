@@ -10,7 +10,7 @@ from typing import Optional, Any
 from dotenv import load_dotenv
 
 load_dotenv()
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("retiro_atm")
 
 class ModeloActualizandoseError(Exception):
     """Excepción para cuando se intenta predecir mientras el modelo carga."""
@@ -30,7 +30,7 @@ class AtmModelProvider:
 
     def __init__(self):
         # Evitar recarga si ya existe instancia
-        if self._modelo is None and not self._actualizando:
+        if not self.esta_listo:
             self.recargar_modelo()
 
     def obtener_modelo(self) -> Any:
@@ -38,7 +38,7 @@ class AtmModelProvider:
         Método centralizado para obtener el modelo.
         Si no está listo o está actualizando, lanza la excepción.
         """
-        if not self.esta_listo or self._modelo is None:
+        if not self.esta_listo:
             raise ModeloActualizandoseError(
                 "Error: API de predicción actualizándose. Por favor, intente en unos segundos."
             )
@@ -67,8 +67,8 @@ class AtmModelProvider:
         """Lógica interna de descarga (sin acceso a disco)."""
         repo_owner = os.environ.get("DAGSHUB_REPO_OWNER", "notificacionesbankmind")
         repo_name = os.environ.get("DAGSHUB_REPO_NAME", "Modelos_BankMind_2026")
-        model_path = os.environ.get("DAGSHUB_MODEL_ATM_PATH", "modelos/atm/modelo_producción.pkl")
-        token = os.environ.get("DAGSHUB_USER_TOKEN")
+        model_path = os.environ.get("DAGSHUB_MODEL_ATM_PATH", "modelos/atm/modelo.pkl")
+        token = os.environ.get("DAGSHUB_USER_TOKEN","1022993058d503226b5e83a649a067c0c2ef2e73")
         
         # Inicializar DagsHub
         try:
@@ -80,13 +80,18 @@ class AtmModelProvider:
         # Intentar en ramas principales
         for branch in ["main", "master"]:
             url = f"https://dagshub.com/{repo_owner}/{repo_name}/raw/{branch}/{model_path}"
+            logger.info(f"Intentando descargar modelo desde: {url}")
             try:
                 response = requests.get(url, auth=auth, timeout=30)
                 if response.status_code == 200:
+                    logger.info("Descarga exitosa, cargando modelo con joblib...")
                     return joblib.load(io.BytesIO(response.content))
+                else:
+                    logger.warning(f"Fallo en rama {branch}. HTTP {response.status_code}: {response.text[:200]}")
             except Exception as e:
                 logger.debug(f"Fallo en rama {branch}: {e}")
         
+        logger.error(f"No se pudo descargar el modelo de ninguna rama. Último intento hacia {url}")
         return None
 
     def _procesar_paquete_modelo(self, model_pack: Any):
