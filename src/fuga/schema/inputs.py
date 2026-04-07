@@ -30,3 +30,24 @@ class ChurnInput(BaseModel):
                 "Tenure": 3
             }
         }
+
+
+class ChurnBatchItem(BaseModel):
+    """Un cliente dentro de una petición batch. El campo 'id' permite
+    emparejar cada resultado con el cliente original."""
+    id: int = Field(..., description="ID del cliente en la BD")
+    CreditScore: int
+    Geography: str
+    Gender: str
+    Age: int
+    Tenure: int
+    Balance: float
+    NumOfProducts: int
+    HasCrCard: int
+    IsActiveMember: int
+    EstimatedSalary: float
+
+
+class ChurnBatchInput(BaseModel):
+    """Cuerpo de la petición batch: lista de clientes a predecir de una vez."""
+    customers: list[ChurnBatchItem]

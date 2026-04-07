@@ -22,7 +22,7 @@ Estrategia de selección (3 capas):
         → Garantiza representatividad geográfica en los gráficos.
 
 Requisitos:
-    - PostgreSQL BankMindDB corriendo en localhost:5432
+    - PostgreSQL BankMindBetta_v2 corriendo en localhost:5432
     - Python FastAPI ML corriendo en localhost:8000
     - pip install psycopg2-binary requests
 
@@ -46,7 +46,7 @@ from datetime import datetime, timezone
 DB_CONFIG = {
     "host":     "localhost",
     "port":     5432,
-    "dbname":   "BankMindDB",
+    "dbname":   "BankMindBetta_V3",
     "user":     "postgres",
     "password": "1234",
 }
@@ -241,7 +241,7 @@ def write_sql_file(sql_inserts: list[str], stats: dict):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     header = f"""-- =============================================================================
 -- SCRIPT: Poblar churn_predictions — Stratified Priority Sampling
--- Base de datos: BankMindDB (PostgreSQL)
+-- Base de datos: BankMindBetta_V3 (PostgreSQL)
 -- Generado: {now_str}
 -- Total predicciones insertadas: {stats['total']}
 --
@@ -284,9 +284,15 @@ def main():
 
     conn = psycopg2.connect(**DB_CONFIG)
 
-    # Clientes que ya tienen predicción → excluir
-    already = get_already_predicted(conn)
-    print(f"\nClientes ya analizados (se excluiran): {len(already)}")
+    # Limpiar predicciones anteriores para dashboard coherente con el nuevo modelo
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM churn_predictions")
+        deleted = cur.rowcount
+    conn.commit()
+    print(f"\nPredicciones anteriores eliminadas: {deleted}")
+
+    already = set()
+    print(f"Clientes ya analizados (se excluiran): 0")
 
     sql_inserts: list[str] = []
 

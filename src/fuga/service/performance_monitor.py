@@ -5,6 +5,16 @@ Evalúa la calidad del modelo en producción comparando predicciones históricas
 contra el estado real del cliente (ground truth: account_details.exited).
 
 Si el Recall cae por debajo del umbral, dispara un re-entrenamiento automático.
+
+Configuración via variables de entorno:
+  CHURN_RECALL_THRESHOLD      — umbral mínimo de Recall (default: 0.75)
+  CHURN_MIN_FEEDBACK_SAMPLES  — muestras mínimas para evaluar (default: 10)
+  CHURN_MATURATION_DAYS       — días que deben pasar antes de considerar una
+                                predicción "madura" para evaluación (default: 1).
+                                En producción real se recomienda 30 días para
+                                dar tiempo al cliente de fugarse o quedarse.
+  CHURN_MONITOR_INTERVAL_HOURS — frecuencia de evaluación automática (default: 6h)
+  CHURN_MONITOR_ENABLED        — activar/desactivar el monitor (default: true)
 """
 
 import os
@@ -15,10 +25,13 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# Force PostgreSQL to send all messages in UTF-8 so psycopg2 can decode them on Windows.
+os.environ.setdefault('PGCLIENTENCODING', 'UTF8')
+
 # ============================================================
 # CONFIGURACIÓN (desde variables de entorno)
 # ============================================================
-RECALL_THRESHOLD = float(os.environ.get("CHURN_RECALL_THRESHOLD", "0.75"))
+RECALL_THRESHOLD = float(os.environ.get("CHURN_RECALL_THRESHOLD", "0.70"))
 MIN_FEEDBACK_SAMPLES = int(os.environ.get("CHURN_MIN_FEEDBACK_SAMPLES", "10"))
 MATURATION_DAYS = int(os.environ.get("CHURN_MATURATION_DAYS", "1"))
 MONITOR_INTERVAL_HOURS = int(os.environ.get("CHURN_MONITOR_INTERVAL_HOURS", "6"))
@@ -30,7 +43,7 @@ class PerformanceMonitorService:
     Servicio de monitoreo de rendimiento del modelo de Churn.
 
     Flujo:
-    1. Consulta predicciones maduras (>30 días) de churn_predictions
+    1. Consulta predicciones maduras (>MATURATION_DAYS días) de churn_predictions
     2. Cruza con account_details.exited (ground truth)
     3. Calcula Recall, F1-Score, Precision, Accuracy
     4. Si Recall < umbral → dispara re-entrenamiento
@@ -38,15 +51,13 @@ class PerformanceMonitorService:
     """
 
     def __init__(self):
-        db_name = os.environ.get("DB_NAME", "BankMindDB")
-        db_user = os.environ.get("DB_USER", "postgres")
-        db_password = os.environ.get("DB_PASSWORD", "1234")
-        db_host = os.environ.get("DB_HOST", "localhost")
-        db_port = os.environ.get("DB_PORT", "5432")
-        self.db_url = (
-            f"dbname='{db_name}' user='{db_user}' "
-            f"password='{db_password}' host='{db_host}' port='{db_port}'"
-        )
+        self.db_params = {
+            'host':     os.environ.get("DB_HOST",     "localhost"),
+            'port':     int(os.environ.get("DB_PORT", "5432")),
+            'dbname':   os.environ.get("DB_NAME",     "BankMindBetta_V3"),
+            'user':     os.environ.get("DB_USER",     "postgres"),
+            'password': os.environ.get("DB_PASSWORD", "1234"),
+        }
 
         # Estado del último análisis
         self.last_evaluation: Optional[dict] = None
@@ -110,6 +121,7 @@ class PerformanceMonitorService:
 
             # 3. Calcular métricas
             metrics = self._compute_metrics(tp, fp, fn, tn)
+            auc_roc = self._compute_auc_roc(feedback_data)
 
             # 4. Determinar estado
             recall = metrics["recall"]
@@ -134,6 +146,7 @@ class PerformanceMonitorService:
                 "f1_score": round(metrics["f1_score"], 4),
                 "precision": round(metrics["precision"], 4),
                 "accuracy": round(metrics["accuracy"], 4),
+                "auc_roc": round(auc_roc, 4) if auc_roc is not None else None,
                 "recall_threshold": RECALL_THRESHOLD,
                 "evaluated_samples": total_samples,
                 "min_samples_required": MIN_FEEDBACK_SAMPLES,
@@ -145,9 +158,11 @@ class PerformanceMonitorService:
                 "last_evaluation_date": datetime.now().isoformat(),
             }
 
+            auc_display = f"{auc_roc:.4f}" if auc_roc is not None else "N/A"
             logger.info(
                 f"Evaluación completada: status={status}, "
                 f"Recall={recall:.4f}, F1={metrics['f1_score']:.4f}, "
+                f"AUC-ROC={auc_display}, "
                 f"Samples={total_samples}"
             )
 
@@ -222,24 +237,33 @@ class PerformanceMonitorService:
 
         Retorna lista de tuplas: (predicted_churn, actual_exited)
         """
-        cutoff_date = datetime.now() - timedelta(days=MATURATION_DAYS)
+        from datetime import timezone
+        cutoff_date = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=MATURATION_DAYS)
 
+        # Usa solo la prediccion mas reciente por cliente (MAX id por cliente).
+        # Evita que predicciones viejas de modelos anteriores distorsionen
+        # las metricas cuando un modelo nuevo ha reemplazado al anterior.
         query = """
         SELECT
-            cp.is_churn    AS predicted_churn,
-            ad.exited      AS actual_exited
+            cp.is_churn          AS predicted_churn,
+            ad.exited            AS actual_exited,
+            cp.churn_probability AS churn_probability
         FROM public.churn_predictions cp
         JOIN public.account_details ad
             ON cp.id_customer = ad.id_customer
-        WHERE cp.prediction_date <= %s
-          AND cp.is_churn IS NOT NULL
+        WHERE cp.id_churn_prediction IN (
+            SELECT MAX(cp2.id_churn_prediction)
+            FROM public.churn_predictions cp2
+            WHERE cp2.prediction_date <= %s
+              AND cp2.is_churn IS NOT NULL
+            GROUP BY cp2.id_customer
+        )
           AND ad.exited IS NOT NULL
-        ORDER BY cp.prediction_date DESC
         """
 
         conn = None
         try:
-            conn = psycopg2.connect(self.db_url)
+            conn = psycopg2.connect(**self.db_params)
             cur = conn.cursor()
             cur.execute(query, (cutoff_date,))
             rows = cur.fetchall()
@@ -276,7 +300,8 @@ class PerformanceMonitorService:
         """
         tp = fp = fn = tn = 0
 
-        for predicted_churn, actual_exited in data:
+        for row in data:
+            predicted_churn, actual_exited = row[0], row[1]
             pred = bool(predicted_churn)
             real = bool(actual_exited)
 
@@ -325,6 +350,42 @@ class PerformanceMonitorService:
         }
 
     # ----------------------------------------------------------------
+    # PRIVADO: AUC-ROC usando probabilidades almacenadas
+    # ----------------------------------------------------------------
+    def _compute_auc_roc(self, data: list) -> Optional[float]:
+        """
+        Calcula AUC-ROC usando churn_probability (columna 3 de cada fila).
+        Requiere que ambas clases (0 y 1) estén presentes en ground truth.
+        Retorna None si no hay probabilidades o si solo hay una clase.
+        """
+        try:
+            from sklearn.metrics import roc_auc_score
+
+            y_true, y_score = [], []
+            for row in data:
+                actual_exited  = row[1]
+                churn_prob     = row[2]
+                if churn_prob is not None:
+                    y_true.append(int(bool(actual_exited)))
+                    y_score.append(float(churn_prob))
+
+            if len(y_score) < 10:
+                logger.warning("AUC-ROC omitido: menos de 10 muestras con probabilidad.")
+                return None
+
+            if len(set(y_true)) < 2:
+                logger.warning("AUC-ROC omitido: ground truth contiene solo una clase.")
+                return None
+
+            auc = roc_auc_score(y_true, y_score)
+            logger.info(f"AUC-ROC calculado: {auc:.4f} ({len(y_score)} muestras con probabilidad)")
+            return auc
+
+        except Exception as e:
+            logger.warning(f"AUC-ROC no calculable: {e}")
+            return None
+
+    # ----------------------------------------------------------------
     # PRIVADO: Disparar re-entrenamiento automático
     # ----------------------------------------------------------------
     def _trigger_auto_retrain(self, evaluation_result: dict):
@@ -355,14 +416,14 @@ class PerformanceMonitorService:
                 evaluation_result["training_run_id"] = training_result.get("run_id")
                 evaluation_result["training_metrics"] = training_result.get("metrics")
                 logger.info(
-                    "✅ Re-entrenamiento automático completado exitosamente. "
+                    "[OK] Re-entrenamiento automatico completado exitosamente. "
                     f"Run ID: {training_result.get('run_id')}"
                 )
             else:
                 evaluation_result["auto_training_triggered"] = False
                 evaluation_result["training_error"] = training_result.get("error")
                 logger.error(
-                    f"❌ Re-entrenamiento automático falló: "
+                    f"[ERROR] Re-entrenamiento automatico fallo: "
                     f"{training_result.get('error')}"
                 )
 
@@ -399,9 +460,14 @@ class PerformanceMonitorService:
         in_production = False
         if training_result and training_result.get("status") == "success":
             new_metrics = training_result.get("metrics", {})
-            run_id = training_result.get("run_id")
-            model_version = run_id[:100] if run_id else None
-            in_production = True
+            version_tag = training_result.get("version_tag")
+            run_id      = training_result.get("run_id")
+            # Prefer version_tag (e.g. "v_1742472000") over hex run_id
+            model_version = (version_tag[:100] if version_tag
+                             else (run_id[:100] if run_id else None))
+            # Los registros de evaluacion nunca marcan in_production=True.
+            # El estado de produccion lo gestiona exclusivamente auto_training_service
+            # cuando promueve un challenger. Evita badges "Prod" duplicados en el historial.
 
         # Warnings en JSONB
         warnings_json = {}
@@ -421,7 +487,7 @@ class PerformanceMonitorService:
 
         conn = None
         try:
-            conn = psycopg2.connect(self.db_url)
+            conn = psycopg2.connect(**self.db_params)
             cur = conn.cursor()
             cur.execute(
                 insert_query,
@@ -434,7 +500,7 @@ class PerformanceMonitorService:
                     evaluation.get("f1_score"),
                     evaluation.get("precision"),
                     evaluation.get("recall"),
-                    None,  # auc_roc no se calcula en la evaluación del monitor
+                    evaluation.get("auc_roc"),  # calculado desde churn_probability
                     evaluation.get("evaluated_samples"),
                     evaluation.get("true_positives"),
                     evaluation.get("false_positives"),
@@ -447,7 +513,7 @@ class PerformanceMonitorService:
             conn.commit()
             cur.close()
             logger.info(
-                f"✅ Evaluación registrada en churn_training_history "
+                f"[OK] Evaluacion registrada en churn_training_history "
                 f"(trigger: {trigger_reason})"
             )
         except Exception as e:
