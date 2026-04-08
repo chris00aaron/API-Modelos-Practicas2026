@@ -1,8 +1,11 @@
 import pandas as pd
 import numpy as np
+import logging
 
 # Import from DagsHub loader instead of local files
 from fuga.models_files.loader import obtener_modelo, obtener_scaler, obtener_feature_names, obtener_explainer, obtener_version
+
+logger = logging.getLogger(__name__)
 
 class ChurnService:
     def __init__(self):
@@ -36,12 +39,12 @@ class ChurnService:
         
         # 1. Gender: LabelEncoder (0: Mujer/Female, 1: Hombre/Male)
         # Ajusta "Male"/"Female" según como vengan tus datos reales
-        df['Gender'] = df['Gender'].map({'Male': 1, 'Female': 0, 'Hombre': 1, 'Mujer': 0})
+        df['Gender'] = df['Gender'].map({'Male': 1, 'Female': 0, 'Hombre': 1, 'Mujer': 0}).fillna(1).astype(int)
 
         # 2. Geography: get_dummies(drop_first=True)
         # Como drop_first=True eliminó la primera columna (alfabéticamente France),
         # solo necesitamos crear las columnas Germany y Spain.
-        input_geo = input_dict['Geography']
+        input_geo = input_dict.get('Geography', 'France')
         
         df['Geography_Germany'] = 1 if input_geo == 'Germany' else 0
         df['Geography_Spain'] = 1 if input_geo == 'Spain' else 0
@@ -65,7 +68,7 @@ class ChurnService:
             scaled_data = self.scaler.transform(df)
             return scaled_data
         
-        return df
+        return df.values
 
     def predict(self, input_data: dict):
         if not self.model:
@@ -106,18 +109,16 @@ class ChurnService:
                 "risk_level": risk_level,
                 "is_churn": result,
                 "prediction_confidence": round(confidence, 4),
-                "model_version": self.model_version,  # M8: Dynamic version from hot-reload
+                "model_version": self.model_version,
                 "risk_factors": risk_factors,
-                "real_exit": is_real_exit # Devolvemos la realidad para validación
+                "real_exit": is_real_exit
             }
             
         except Exception as e:
-            import traceback
-            traceback.print_exc() # Esto te imprimirá el error exacto en la terminal
+            logger.exception("[CHURN SERVICE] Error en predicción")
             return {"error": str(e)}
 
     # Mapa de nombre de feature procesado → etiqueta legible
-    # Recibe el feature_name y el dict original de input para mostrar valores reales
     _FEATURE_LABELS = {
         'Age':                 lambda d: f"Edad ({d.get('Age', '?')} años)",
         'IsActiveMember':      lambda d: "Cliente Activo" if d.get('IsActiveMember') == 1 else "Cliente Inactivo",
@@ -139,31 +140,24 @@ class ChurnService:
         """
         Genera factores de riesgo usando SHAP TreeExplainer sobre el modelo XGBoost.
         Si SHAP no está disponible, usa el sistema de reglas como fallback.
-        Retorna una lista de objetos {feature, impact, type} — top 7 por |impacto|.
-
-        - impact > 0  → aumenta riesgo de fuga   → type: "negative"
-        - impact < 0  → reduce  riesgo de fuga   → type: "positive"
-        Los valores se normalizan a escala -100..+100.
         """
         if self.explainer is not None and X_processed is not None and self.feature_names:
             try:
                 shap_values = self.explainer.shap_values(X_processed)
 
-                # XGBoost puede devolver lista [clase0, clase1] o array directo
                 if isinstance(shap_values, list):
-                    row = shap_values[1][0]   # clase 1 (churn), primera fila
+                    row = shap_values[1][0]
                 elif len(shap_values.shape) == 2:
                     row = shap_values[0]
                 else:
                     row = shap_values
 
-                # Normalizar a -100..+100 (clip garantiza que no se salga del rango)
                 max_abs = np.max(np.abs(row)) if np.max(np.abs(row)) > 0 else 1.0
                 normalized = np.clip((row / max_abs) * 100.0, -100.0, 100.0)
 
                 factors = []
                 for feat, shap_val in zip(self.feature_names, normalized):
-                    if abs(shap_val) < 0.5:   # filtrar ruido
+                    if abs(shap_val) < 0.5:
                         continue
                     label_fn = self._FEATURE_LABELS.get(feat)
                     label = label_fn(data) if label_fn else feat
@@ -176,11 +170,12 @@ class ChurnService:
                 return sorted(factors, key=lambda x: abs(x['impact']), reverse=True)[:7]
 
             except Exception as e:
-                import traceback
-                traceback.print_exc()
-                print(f"[CHURN XAI] SHAP falló ({e}), usando fallback de reglas.")
+                logger.warning(f"[CHURN XAI] SHAP falló ({e}), usando fallback de reglas.")
 
-        # ── Fallback: sistema de reglas (se usa si SHAP no está disponible) ──────
+        return self._get_rule_based_factors(data)
+
+    def _get_rule_based_factors(self, data: dict) -> list:
+        """Sistema de reglas manuales para cuando SHAP no está disponible."""
         feature_importances = {}
         if self.model and self.feature_names:
             try:
@@ -196,77 +191,25 @@ class ChurnService:
             return round(base_impact * multiplier)
 
         factors = []
+        # Reglas básicas (Simplificadas para el fallback)
         age = data.get('Age', 0)
-        if age > 45:
-            factors.append({"feature": f"Edad Avanzada ({age} años)", "impact": scale_impact(30, 'Age'), "type": "negative"})
-        elif age > 35:
-            factors.append({"feature": f"Edad Media ({age} años)", "impact": scale_impact(10, 'Age'), "type": "negative"})
-        elif age < 30:
-            factors.append({"feature": f"Edad Joven ({age} años)", "impact": scale_impact(-15, 'Age'), "type": "positive"})
+        if age > 45: factors.append({"feature": f"Edad Avanzada ({age} años)", "impact": scale_impact(30, 'Age'), "type": "negative"})
+        elif age < 30: factors.append({"feature": f"Edad Joven ({age} años)", "impact": scale_impact(-15, 'Age'), "type": "positive"})
 
         active = data.get('IsActiveMember', 0)
-        if active == 1:
-            factors.append({"feature": "Cliente Activo", "impact": scale_impact(-25, 'IsActiveMember'), "type": "positive"})
-        else:
-            factors.append({"feature": "Cliente Inactivo", "impact": scale_impact(20, 'IsActiveMember'), "type": "negative"})
+        if active == 0: factors.append({"feature": "Cliente Inactivo", "impact": scale_impact(20, 'IsActiveMember'), "type": "negative"})
+        else: factors.append({"feature": "Cliente Activo", "impact": scale_impact(-25, 'IsActiveMember'), "type": "positive"})
 
         balance = data.get('Balance', 0)
-        if balance > 150000:
-            factors.append({"feature": f"Balance Muy Alto (€{balance:,.0f})", "impact": scale_impact(25, 'Balance'), "type": "negative"})
-        elif balance > 100000:
-            factors.append({"feature": f"Balance Alto (€{balance:,.0f})", "impact": scale_impact(15, 'Balance'), "type": "negative"})
-        elif balance == 0:
-            factors.append({"feature": "Saldo Cero", "impact": scale_impact(10, 'Balance'), "type": "negative"})
-        elif balance > 50000:
-            factors.append({"feature": f"Balance Saludable (€{balance:,.0f})", "impact": scale_impact(-10, 'Balance'), "type": "positive"})
+        if balance > 100000: factors.append({"feature": "Balance Alto", "impact": scale_impact(20, 'Balance'), "type": "negative"})
+        elif balance == 0: factors.append({"feature": "Saldo Cero", "impact": scale_impact(10, 'Balance'), "type": "negative"})
 
         products = data.get('NumOfProducts', 1)
-        if products >= 3:
-            factors.append({"feature": f"Exceso de Productos ({products})", "impact": scale_impact(40, 'NumOfProducts'), "type": "negative"})
-        elif products == 2:
-            factors.append({"feature": "Vinculación Óptima (2 productos)", "impact": scale_impact(-20, 'NumOfProducts'), "type": "positive"})
-        elif products == 1:
-            factors.append({"feature": "Baja Vinculación (1 producto)", "impact": scale_impact(10, 'NumOfProducts'), "type": "negative"})
+        if products >= 3: factors.append({"feature": f"Exceso de Productos ({products})", "impact": scale_impact(40, 'NumOfProducts'), "type": "negative"})
+        elif products == 2: factors.append({"feature": "Vinculación Óptima (2)", "impact": scale_impact(-20, 'NumOfProducts'), "type": "positive"})
 
-        score = data.get('CreditScore', 600)
-        if score < 450:
-            factors.append({"feature": f"Score Crediticio Muy Bajo ({score})", "impact": scale_impact(35, 'CreditScore'), "type": "negative"})
-        elif score < 550:
-            factors.append({"feature": f"Score Crediticio Bajo ({score})", "impact": scale_impact(20, 'CreditScore'), "type": "negative"})
-        elif score > 750:
-            factors.append({"feature": f"Score Crediticio Excelente ({score})", "impact": scale_impact(-15, 'CreditScore'), "type": "positive"})
-
-        geography = data.get('Geography', 'Unknown')
-        if geography in ('Germany', 'Alemania'):
-            factors.append({"feature": f"Geografía de Riesgo ({geography})", "impact": scale_impact(25, 'Geography_Germany'), "type": "negative"})
-        elif geography in ('France', 'Francia'):
-            factors.append({"feature": f"Geografía Estable ({geography})", "impact": scale_impact(-10, 'Geography_Germany'), "type": "positive"})
-        elif geography in ('Spain', 'España'):
-            factors.append({"feature": f"Geografía Favorable ({geography})", "impact": scale_impact(-12, 'Geography_Spain'), "type": "positive"})
-
-        gender = data.get('Gender', 'Unknown')
-        if gender == 'Female':
-            factors.append({"feature": "Género Femenino (mayor riesgo histórico)", "impact": scale_impact(15, 'Gender'), "type": "negative"})
-        elif gender == 'Male':
-            factors.append({"feature": "Género Masculino (menor riesgo histórico)", "impact": scale_impact(-8, 'Gender'), "type": "positive"})
-
-        tenure = data.get('Tenure', 5)
-        if tenure <= 1:
-            factors.append({"feature": f"Cliente Nuevo ({tenure} año{'s' if tenure != 1 else ''})", "impact": scale_impact(20, 'Tenure'), "type": "negative"})
-        elif tenure <= 3:
-            factors.append({"feature": f"Baja Antigüedad ({tenure} años)", "impact": scale_impact(10, 'Tenure'), "type": "negative"})
-        elif tenure >= 8:
-            factors.append({"feature": f"Alta Fidelización ({tenure} años)", "impact": scale_impact(-18, 'Tenure'), "type": "positive"})
-
-        has_card = data.get('HasCrCard', 1)
-        if has_card == 0:
-            factors.append({"feature": "Sin Tarjeta de Crédito", "impact": scale_impact(12, 'HasCrCard'), "type": "negative"})
-
-        salary = data.get('EstimatedSalary', 50000)
-        if salary < 30000:
-            factors.append({"feature": f"Salario Bajo (€{salary:,.0f})", "impact": scale_impact(15, 'EstimatedSalary'), "type": "negative"})
-        elif salary > 150000:
-            factors.append({"feature": f"Salario Alto (€{salary:,.0f})", "impact": scale_impact(-10, 'EstimatedSalary'), "type": "positive"})
+        geography = data.get('Geography', 'France')
+        if geography == 'Germany': factors.append({"feature": "Geografía de Riesgo (Alemania)", "impact": scale_impact(25, 'Geography_Germany'), "type": "negative"})
 
         # Normalizar fallback a -100..+100
         if factors:
@@ -276,72 +219,48 @@ class ChurnService:
         return sorted(factors, key=lambda x: abs(x['impact']), reverse=True)[:7]
 
     def preprocess_batch(self, input_list: list[dict]):
-        """
-        Versión vectorizada de preprocess_data para múltiples registros.
-        Recibe una lista de dicts (sin el campo 'id') y devuelve la matriz
-        escalada lista para model.predict / predict_proba.
-        """
+        """Versión vectorizada de preprocess_data."""
         df = pd.DataFrame(input_list)
-
         epsilon = 1e-9
-        df['TenureByAge']         = df['Tenure'] / (df['Age'] + epsilon)
-        df['BalanceSalaryRatio']  = df['Balance'] / (df['EstimatedSalary'] + epsilon)
+        df['TenureByAge'] = df['Tenure'] / (df['Age'] + epsilon)
+        df['BalanceSalaryRatio'] = df['Balance'] / (df['EstimatedSalary'] + epsilon)
         df['CreditScoreGivenAge'] = df['CreditScore'] / (df['Age'] + epsilon)
-
-        df['Gender'] = df['Gender'].map(
-            {'Male': 1, 'Female': 0, 'Hombre': 1, 'Mujer': 0}
-        ).fillna(1).astype(int)
-
+        df['Gender'] = df['Gender'].map({'Male': 1, 'Female': 0, 'Hombre': 1, 'Mujer': 0}).fillna(1).astype(int)
         df['Geography_Germany'] = (df['Geography'] == 'Germany').astype(int)
-        df['Geography_Spain']   = (df['Geography'] == 'Spain').astype(int)
+        df['Geography_Spain'] = (df['Geography'] == 'Spain').astype(int)
         df = df.drop(columns=['Geography'], errors='ignore')
-
         if self.feature_names:
             df = df.reindex(columns=self.feature_names, fill_value=0)
-
         if self.scaler:
             return self.scaler.transform(df)
         return df.values
 
     def predict_batch(self, items: list[dict]):
-        """
-        Predice la fuga para una lista de clientes en una sola llamada
-        vectorizada al modelo. No genera explicaciones SHAP (uso batch).
-        Cada item debe tener 'id' + los campos de ChurnBatchItem.
-        Retorna una lista de dicts con id, churn_probability, risk_level,
-        is_churn, prediction_confidence y model_version.
-        """
-        if not self.model:
-            return {"error": "El modelo no está cargado."}
-
+        """Predicción en lote vectorizada."""
+        if not self.model: return {"error": "El modelo no está cargado."}
         try:
-            ids        = [item['id'] for item in items]
+            ids = [item['id'] for item in items]
             input_data = [{k: v for k, v in item.items() if k != 'id'} for item in items]
-
             DECISION_THRESHOLD = 0.50
-            X     = self.preprocess_batch(input_data)
+            X = self.preprocess_batch(input_data)
             probs = self.model.predict_proba(X)[:, 1]
-
             results = []
             for i, prob in enumerate(probs):
-                prob       = float(prob)
-                pred       = 1 if prob >= DECISION_THRESHOLD else 0
+                prob = float(prob)
+                pred = 1 if prob >= DECISION_THRESHOLD else 0
                 risk_level = "Alto" if prob > 0.75 else "Medio" if prob >= DECISION_THRESHOLD else "Bajo"
                 confidence = round(min(1.0, abs(prob - DECISION_THRESHOLD) * 2), 4)
                 results.append({
-                    "id":                   ids[i],
-                    "churn_probability":    round(prob, 4),
-                    "risk_level":           risk_level,
-                    "is_churn":             int(pred),
+                    "id": ids[i],
+                    "churn_probability": round(prob, 4),
+                    "risk_level": risk_level,
+                    "is_churn": int(pred),
                     "prediction_confidence": confidence,
-                    "model_version":        self.model_version,
+                    "model_version": self.model_version,
                 })
             return results
-
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            logger.exception("[CHURN SERVICE] Error en predict_batch")
             return {"error": str(e)}
-
 
 churn_service = ChurnService()

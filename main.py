@@ -2,6 +2,12 @@
 import logging
 import sys
 import os
+from dotenv import load_dotenv
+
+# Cargar .env antes de cualquier importación de módulos propios,
+# para que os.environ.get() en performance_monitor.py, loader.py, etc.
+# lean los valores correctos desde el inicio.
+load_dotenv()
 
 # ── Force UTF-8 on Windows ──────────────────────────────────────────────
 # Windows cmd.exe uses cp1252 by default, which crashes on Unicode emojis
@@ -34,60 +40,6 @@ try:
 except ImportError as e:
     print(f"Error de importación: {e}")
     sys.exit(1)
-
-# ============================================================
-# APScheduler para Performance Monitor del modelo de Churn
-# ============================================================
-_scheduler = None
-
-
-def _setup_churn_monitor():
-    """Configura el scheduler para el monitor de rendimiento de Churn."""
-    global _scheduler
-    try:
-        from apscheduler.schedulers.background import BackgroundScheduler # type: ignore
-        from fuga.service.performance_monitor import (
-            performance_monitor,
-            MONITOR_ENABLED,
-            MONITOR_INTERVAL_HOURS,
-        )
-
-        if not MONITOR_ENABLED:
-            print("[CHURN MONITOR] Monitor deshabilitado por configuración (CHURN_MONITOR_ENABLED=false)")
-            return
-
-        _scheduler = BackgroundScheduler()
-        _scheduler.add_job(
-            performance_monitor.run_scheduled_evaluation,
-            'interval',
-            hours=MONITOR_INTERVAL_HOURS,
-            id='churn_performance_monitor',
-            name='Churn Performance Monitor',
-            replace_existing=True,
-            max_instances=1,  # Solo una instancia a la vez
-        )
-        _scheduler.start()
-        print(
-            f"[CHURN MONITOR] [OK] Scheduler iniciado. "
-            f"Evaluacion cada {MONITOR_INTERVAL_HOURS} horas."
-        )
-    except ImportError:
-        print(
-            "[CHURN MONITOR] [WARN] APScheduler no instalado. "
-            "El monitor automatico NO esta activo. "
-            "Instala con: pip install apscheduler"
-        )
-    except Exception as e:
-        print(f"[CHURN MONITOR] [ERROR] Error iniciando scheduler: {e}")
-
-
-def _shutdown_churn_monitor():
-    """Detiene el scheduler del monitor de rendimiento."""
-    global _scheduler
-    if _scheduler:
-        _scheduler.shutdown(wait=False)
-        print("[CHURN MONITOR] Scheduler detenido.")
-        _scheduler = None
 
 
 # Iniciar la aplicación FastAPI
@@ -138,31 +90,8 @@ async def startup_event():
     except Exception as e:
         print(f"[STARTUP] Error precargando modelo de Churn: {e}")
 
-    # Verificar permisos del token DagsHub para escritura (CHURN)
-    print("[STARTUP] Verificando permisos del token DagsHub para CHURN...")
-    try:
-        from fuga import dagshub_client as churn_dagshub
-        token_info = churn_dagshub.check_token_permissions()
-        for msg in token_info.get('messages', []):
-            safe_msg = msg.encode('ascii', errors='replace').decode('ascii')
-            print(f"[STARTUP] [CHURN TOKEN] {safe_msg}")
-        if not token_info.get('write'):
-            print(
-                "[STARTUP] [WARN] CHURN: El token DagsHub NO tiene permisos de escritura. "
-                "El reentrenamiento NO podra subir modelos a DagsHub."
-            )
-    except Exception as e:
-        print(f"[STARTUP] [WARN] No se pudo verificar token DagsHub: {e}")
 
-    # Iniciar monitor de rendimiento de Churn
-    print("[STARTUP] Iniciando monitor de rendimiento de Churn...")
-    _setup_churn_monitor()
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Limpia recursos al detener la API."""
-    _shutdown_churn_monitor()
+    # Nota: el scheduler del monitor Churn vive en api-self-training-Bankmind/main.py
 
 
 #Codigo base
