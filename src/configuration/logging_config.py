@@ -16,6 +16,7 @@ LOGGING_CONFIG = {
         "console": {
             "class": "logging.StreamHandler",
             "formatter": "default",
+            "stream": "ext://sys.stdout",
         },
         # Log para errores de toda la app (Cualquier módulo)
         "file_errors": {
