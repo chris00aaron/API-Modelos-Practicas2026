@@ -87,10 +87,14 @@ class ChurnService:
             result      = 1 if prob_churn >= DECISION_THRESHOLD else 0
 
             # Calcular nivel de riesgo y confianza
+            # Umbrales alineados con Java (ChurnService) y Frontend:
+            #   Alto  : prob > 0.70  (risk > 70)
+            #   Medio : prob >= 0.45 (risk >= 45)
+            #   Bajo  : prob < 0.45
             risk_level = "Bajo"
-            if prob_churn > 0.75:
+            if prob_churn > 0.70:
                 risk_level = "Alto"
-            elif prob_churn >= DECISION_THRESHOLD:
+            elif prob_churn >= 0.45:
                 risk_level = "Medio"
 
             # Confianza: qué tan lejos está del umbral de decisión (acotado a [0, 1])
@@ -248,7 +252,7 @@ class ChurnService:
             for i, prob in enumerate(probs):
                 prob = float(prob)
                 pred = 1 if prob >= DECISION_THRESHOLD else 0
-                risk_level = "Alto" if prob > 0.75 else "Medio" if prob >= DECISION_THRESHOLD else "Bajo"
+                risk_level = "Alto" if prob > 0.70 else "Medio" if prob >= 0.45 else "Bajo"
                 confidence = round(min(1.0, abs(prob - DECISION_THRESHOLD) * 2), 4)
                 results.append({
                     "id": ids[i],
