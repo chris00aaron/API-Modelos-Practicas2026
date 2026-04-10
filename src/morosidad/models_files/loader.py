@@ -8,65 +8,28 @@ import dagshub
 import mlflow
 import requests
 
-from dotenv import load_dotenv
-
-# Cargar variables de entorno desde .env (override=False para no sobreescribir
-# las variables ya inyectadas por Docker Compose vía env_file/environment)
-load_dotenv(override=False)
-
 logger = logging.getLogger(__name__)
 
-# ── Diagnóstico de variables de entorno (visible en logs de Docker) ──────────
-_ENV_KEYS = [
-    "DAGSHUB_USER_TOKEN",
-    "DAGSHUB_REPO_OWNER",
-    "DAGSHUB_REPO_NAME",
-    "DAGSHUB_MODEL_DEFAULT_PATH",
-]
+# ============================================================
+# CONFIGURACIÓN HARDCODEADA — DagsHub Morosidad
+# ============================================================
+DAGSHUB_REPO_OWNER = "notificacionesbankmind"
+DAGSHUB_REPO_NAME = "Modelos_BankMind_2026"
+DAGSHUB_MODEL_PATH = "modelos/morosidad/modelo.pkl"
+DAGSHUB_TOKEN = "1022993058d503226b5e83a649a067c0c2ef2e73"
 
-print("[LOADER-DIAG] === Diagnóstico de variables DagsHub ===")
-for _k in _ENV_KEYS:
-    _v = os.environ.get(_k)
-    if _v:
-        # Mostrar solo los primeros 8 chars del token por seguridad
-        display = f"{_v[:8]}...({len(_v)} chars)" if "TOKEN" in _k else _v
-        print(f"[LOADER-DIAG]   {_k} = {display}")
-    else:
-        print(f"[LOADER-DIAG]   {_k} = *** NO CONFIGURADO ***")
-print("[LOADER-DIAG] ==========================================")
+# Forzar el token en el entorno para que dagshub/mlflow lo encuentren
+os.environ["DAGSHUB_USER_TOKEN"] = DAGSHUB_TOKEN
 
-# Configuración DagsHub (leer de las variables de entorno ya resueltas)
-DAGSHUB_REPO_OWNER = os.environ.get("DAGSHUB_REPO_OWNER")
-DAGSHUB_REPO_NAME = os.environ.get("DAGSHUB_REPO_NAME")
-DAGSHUB_MODEL_PATH = os.environ.get("DAGSHUB_MODEL_DEFAULT_PATH")
-
-# Token de DagsHub (desde variable de entorno)
-DAGSHUB_TOKEN = os.environ.get("DAGSHUB_USER_TOKEN")
-
-# Configurar token en variables de entorno para dagshub/mlflow
-if DAGSHUB_TOKEN:
-    os.environ["DAGSHUB_USER_TOKEN"] = DAGSHUB_TOKEN
-    print(f"[SETUP] Token DagsHub configurado (len={len(DAGSHUB_TOKEN)})")
-else:
-    print("[SETUP] DAGSHUB_USER_TOKEN no configurado. Revisa las variables de entorno o el archivo .env")
+print(f"[MOROSIDAD] Token DagsHub hardcodeado (len={len(DAGSHUB_TOKEN)})")
+print(f"[MOROSIDAD] Repo: {DAGSHUB_REPO_OWNER}/{DAGSHUB_REPO_NAME}")
+print(f"[MOROSIDAD] Model path: {DAGSHUB_MODEL_PATH}")
 
 # Variables globales (singleton)
 _modelo = None
 _explainer = None
 _version = "v1.0"  # Valor por defecto
 _dagshub_initialized = False
-
-
-def _verificar_token():
-    """Verifica si hay token de DagsHub configurado."""
-    token = os.environ.get("DAGSHUB_USER_TOKEN")
-    if token:
-        logger.debug(f"Token DagsHub encontrado (longitud: {len(token)} chars)")
-        return True
-    else:
-        logger.warning("No se encontró DAGSHUB_USER_TOKEN en variables de entorno")
-        logger.info("Configura el token en las variables de entorno o en el archivo .env del proyecto")
-        return False
 
 
 def _init_dagshub():
@@ -77,9 +40,6 @@ def _init_dagshub():
     """
     global _dagshub_initialized
     if not _dagshub_initialized:
-        logger.debug(f"Intentando conectar a DagsHub: {DAGSHUB_REPO_OWNER}/{DAGSHUB_REPO_NAME}")
-        _verificar_token()
-        
         try:
             dagshub.init(
                 repo_owner=DAGSHUB_REPO_OWNER,
@@ -88,10 +48,8 @@ def _init_dagshub():
             )
             _dagshub_initialized = True
             logger.info(f"Conectado a DagsHub: {DAGSHUB_REPO_OWNER}/{DAGSHUB_REPO_NAME}")
-            logger.debug(f"MLflow Tracking URI: {mlflow.get_tracking_uri()}")
         except Exception as e:
             # dagshub.init() falló, pero la descarga HTTP directa puede funcionar.
-            # Marcamos como "inicializado" para no reintentar en cada llamada.
             _dagshub_initialized = True
             logger.warning(
                 f"dagshub.init() falló ({type(e).__name__}: {e}). "
@@ -104,37 +62,18 @@ def _descargar_modelo_dagshub():
     Descarga el modelo desde DagsHub y lo carga directamente en memoria.
     No guarda ningún archivo en disco.
     
-    La descarga HTTP directa funciona independientemente de dagshub.init().
-    Solo necesita el token para autenticación HTTP básica.
-    
     Returns:
         El contenido del archivo .pkl cargado, o None si falla.
     """
-    # Re-leer token por si fue configurado después del import del módulo
-    token = os.environ.get("DAGSHUB_USER_TOKEN") or DAGSHUB_TOKEN
-    repo_owner = os.environ.get("DAGSHUB_REPO_OWNER") or DAGSHUB_REPO_OWNER
-    repo_name = os.environ.get("DAGSHUB_REPO_NAME") or DAGSHUB_REPO_NAME
-    model_path = os.environ.get("DAGSHUB_MODEL_DEFAULT_PATH") or DAGSHUB_MODEL_PATH
-
-    if not all([token, repo_owner, repo_name, model_path]):
-        logger.error(
-            "Faltan variables de entorno para DagsHub. "
-            f"TOKEN={'OK' if token else 'FALTA'}, "
-            f"OWNER={'OK' if repo_owner else 'FALTA'}, "
-            f"REPO={'OK' if repo_name else 'FALTA'}, "
-            f"PATH={'OK' if model_path else 'FALTA'}"
-        )
-        return None
-
     try:
         # Intentar inicializar dagshub (opcional, no bloquea si falla)
         _init_dagshub()
         
-        auth = (token, "")
+        auth = (DAGSHUB_TOKEN, "")
         branches = ["main", "master"]
         
         for branch in branches:
-            raw_url = f"https://dagshub.com/{repo_owner}/{repo_name}/raw/{branch}/{model_path}"
+            raw_url = f"https://dagshub.com/{DAGSHUB_REPO_OWNER}/{DAGSHUB_REPO_NAME}/raw/{branch}/{DAGSHUB_MODEL_PATH}"
             logger.info(f"Intentando descargar modelo desde: {raw_url}")
             
             try:
@@ -228,7 +167,7 @@ def obtener_modelo():
     if modelo is None:
         raise RuntimeError(
             "El modelo de morosidad no está disponible. "
-            "Verifica la conexión a DagsHub y las credenciales en las variables de entorno"
+            "Verifica la conexión a DagsHub."
         )
     return modelo
 

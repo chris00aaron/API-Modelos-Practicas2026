@@ -15,35 +15,28 @@ import requests
 import dagshub
 import mlflow
 
-from dotenv import load_dotenv
-
-# Cargar variables de entorno desde .env
-load_dotenv(encoding='latin-1')
-
 logger = logging.getLogger(__name__)
 
 # ============================================================
-# CONFIGURACIÓN DE DAGSHUB - MODELO DE CHURN
+# CONFIGURACIÓN HARDCODEADA — DagsHub Churn (Fuga)
 # ============================================================
 DAGSHUB_REPO_OWNER = "notificacionesbankmind"
 DAGSHUB_REPO_NAME = "Modelos_BankMind_2026"
+DAGSHUB_TOKEN = "1022993058d503226b5e83a649a067c0c2ef2e73"
 
 # Ruta del combo-pack (nuevo formato)
-DAGSHUB_COMBO_PATH = os.environ.get("DAGSHUB_MODEL_FUGA_PATH", "modelos/fuga/modelos_produccion/churn_champion.pkl")
+DAGSHUB_COMBO_PATH = "modelos/fuga/modelos_produccion/churn_champion.pkl"
 
 # Rutas legacy (3 archivos separados - fallback)
-DAGSHUB_MODEL_PATH = os.environ.get("DAGSHUB_MODEL_FUGA_LEGACY_PATH", "modelos/fuga/modelos_produccion/best_model_churn.pkl")
-DAGSHUB_SCALER_PATH = os.environ.get("DAGSHUB_MODEL_FUGA_SCALER_PATH", "modelos/fuga/modelos_produccion/scaler.pkl")
-DAGSHUB_FEATURES_PATH = os.environ.get("DAGSHUB_MODEL_FUGA_FEATURES_PATH", "modelos/fuga/modelos_produccion/feature_names.pkl")
+DAGSHUB_MODEL_PATH = "modelos/fuga/modelos_produccion/best_model_churn.pkl"
+DAGSHUB_SCALER_PATH = "modelos/fuga/modelos_produccion/scaler.pkl"
+DAGSHUB_FEATURES_PATH = "modelos/fuga/modelos_produccion/feature_names.pkl"
 
-# Token de DagsHub (desde variable de entorno)
-DAGSHUB_TOKEN = os.environ.get("DAGSHUB_USER_TOKEN")
+# Forzar el token en el entorno para que dagshub/mlflow lo encuentren
+os.environ["DAGSHUB_USER_TOKEN"] = DAGSHUB_TOKEN
 
-if DAGSHUB_TOKEN:
-    os.environ["DAGSHUB_USER_TOKEN"] = DAGSHUB_TOKEN
-    print(f"[CHURN] Token DagsHub configurado (len={len(DAGSHUB_TOKEN)})")
-else:
-    print("[CHURN] ⚠️ DAGSHUB_USER_TOKEN no configurado. Revisa el archivo .env")
+print(f"[CHURN] Token DagsHub hardcodeado (len={len(DAGSHUB_TOKEN)})")
+print(f"[CHURN] Repo: {DAGSHUB_REPO_OWNER}/{DAGSHUB_REPO_NAME}")
 
 # Variables globales (singleton)
 _modelo = None
@@ -64,7 +57,7 @@ class ChurnModelActualizandoseError(Exception):
 
 
 def _init_dagshub():
-    """Inicializa la conexión a DagsHub/MLflow."""
+    """Inicializa la conexión a DagsHub/MLflow (opcional, no bloquea la descarga HTTP)."""
     global _dagshub_initialized
     if not _dagshub_initialized:
         try:
@@ -76,7 +69,8 @@ def _init_dagshub():
             _dagshub_initialized = True
             logger.info(f"[CHURN] Conectado a DagsHub: {DAGSHUB_REPO_OWNER}/{DAGSHUB_REPO_NAME}")
         except Exception as e:
-            logger.error(f"[CHURN] Error conectando a DagsHub: {e}")
+            _dagshub_initialized = True
+            logger.warning(f"[CHURN] dagshub.init() falló ({e}). Descarga HTTP directa como fallback.")
 
 
 def _descargar_archivo_dagshub(file_path: str):
@@ -89,7 +83,7 @@ def _descargar_archivo_dagshub(file_path: str):
     try:
         _init_dagshub()
 
-        auth = (DAGSHUB_TOKEN, "") if DAGSHUB_TOKEN else None
+        auth = (DAGSHUB_TOKEN, "")
         branches = ["main", "master"]
 
         for branch in branches:

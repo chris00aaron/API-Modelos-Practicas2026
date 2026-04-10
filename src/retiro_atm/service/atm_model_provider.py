@@ -2,15 +2,26 @@ import numpy as np
 import logging
 import os
 import io
-import logging
 import joblib
 import requests
 import dagshub
 from typing import Optional, Any
-from dotenv import load_dotenv
 
-load_dotenv()
 logger = logging.getLogger("retiro_atm")
+
+# ============================================================
+# CONFIGURACIÓN HARDCODEADA — DagsHub ATM
+# ============================================================
+_REPO_OWNER = "notificacionesbankmind"
+_REPO_NAME = "Modelos_BankMind_2026"
+_MODEL_PATH = "modelos/atm/modelo.pkl"
+_TOKEN = "1022993058d503226b5e83a649a067c0c2ef2e73"
+
+# Forzar el token en el entorno para que dagshub/mlflow lo encuentren
+os.environ["DAGSHUB_USER_TOKEN"] = _TOKEN
+
+print(f"[ATM] Token DagsHub hardcodeado (len={len(_TOKEN)})")
+print(f"[ATM] Repo: {_REPO_OWNER}/{_REPO_NAME}")
 
 class ModeloActualizandoseError(Exception):
     """Excepción para cuando se intenta predecir mientras el modelo carga."""
@@ -65,21 +76,16 @@ class AtmModelProvider:
 
     def _descargar_desde_dagshub(self) -> Optional[Any]:
         """Lógica interna de descarga (sin acceso a disco)."""
-        repo_owner = os.environ.get("DAGSHUB_REPO_OWNER", "notificacionesbankmind")
-        repo_name = os.environ.get("DAGSHUB_REPO_NAME", "Modelos_BankMind_2026")
-        model_path = os.environ.get("DAGSHUB_MODEL_ATM_PATH", "modelos/atm/modelo.pkl")
-        token = os.environ.get("DAGSHUB_USER_TOKEN","1022993058d503226b5e83a649a067c0c2ef2e73")
-        
-        # Inicializar DagsHub
+        # Inicializar DagsHub (opcional, no bloquea si falla)
         try:
-            dagshub.init(repo_owner=repo_owner, repo_name=repo_name, mlflow=True) # type: ignore
+            dagshub.init(repo_owner=_REPO_OWNER, repo_name=_REPO_NAME, mlflow=True) # type: ignore
         except Exception as e:
-            logger.warning(f"Fallo al inicializar DagsHub: {e}")
+            logger.warning(f"dagshub.init() falló: {e}. Descarga HTTP directa como fallback.")
 
-        auth = (token, "") if token else None
+        auth = (_TOKEN, "")
         # Intentar en ramas principales
         for branch in ["main", "master"]:
-            url = f"https://dagshub.com/{repo_owner}/{repo_name}/raw/{branch}/{model_path}"
+            url = f"https://dagshub.com/{_REPO_OWNER}/{_REPO_NAME}/raw/{branch}/{_MODEL_PATH}"
             logger.info(f"Intentando descargar modelo desde: {url}")
             try:
                 response = requests.get(url, auth=auth, timeout=30)

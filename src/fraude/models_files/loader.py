@@ -13,9 +13,6 @@ import joblib
 import mlflow
 import requests
 import threading
-from dotenv import load_dotenv
-
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +23,16 @@ _REPO_OWNER = "notificacionesbankmind"
 _REPO_NAME = "Modelos_BankMind_2026"
 _MODEL_PATH = "modelos/fraude/modelo.pkl"
 _BRANCHES = ["main", "master"]
+_TOKEN = "1022993058d503226b5e83a649a067c0c2ef2e73"
 
 # Timeout para HTTP: (connect_timeout, read_timeout) en segundos
 _HTTP_TIMEOUT = (10, 60)
+
+# Forzar el token en el entorno para que dagshub/mlflow lo encuentren
+os.environ["DAGSHUB_USER_TOKEN"] = _TOKEN
+
+print(f"[FRAUDE] Token DagsHub hardcodeado (len={len(_TOKEN)})")
+print(f"[FRAUDE] Repo: {_REPO_OWNER}/{_REPO_NAME}")
 
 
 # ---------------------------------------------------------------------------
@@ -48,14 +52,8 @@ class ModelLoader:
         self._model_pack: dict | None = None
         self._version: str = "v1.0"
         self._dagshub_initialized: bool = False
-        self._token: str | None = os.environ.get("DAGSHUB_USER_TOKEN")
+        self._token: str = _TOKEN
         self._lock = threading.Lock()
-
-        if not self._token:
-            logger.warning(
-                "DAGSHUB_USER_TOKEN no configurado. "
-                "Revisa el archivo .env antes de arrancar el servidor."
-            )
 
     # ------------------------------------------------------------------
     # Pública
@@ -129,7 +127,8 @@ class ModelLoader:
             self._dagshub_initialized = True
             logger.info("DagsHub inicializado. MLflow URI: %s", mlflow.get_tracking_uri())
         except Exception as exc:
-            logger.error("Error inicializando DagsHub: %s: %s", type(exc).__name__, exc)
+            self._dagshub_initialized = True
+            logger.warning("dagshub.init() falló (%s: %s). Descarga HTTP directa como fallback.", type(exc).__name__, exc)
 
     def _download(self) -> dict | None:
         """
@@ -139,7 +138,7 @@ class ModelLoader:
             dict con los componentes del modelo, o None si falla.
         """
         self._init_dagshub()
-        auth = (self._token, "") if self._token else None
+        auth = (self._token, "")
 
         for branch in _BRANCHES:
             url = (

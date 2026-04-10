@@ -2,12 +2,6 @@
 import logging
 import sys
 import os
-from dotenv import load_dotenv
-
-# Cargar .env antes de cualquier importación de módulos propios,
-# para que os.environ.get() en performance_monitor.py, loader.py, etc.
-# lean los valores correctos desde el inicio.
-load_dotenv()
 
 # ── Force UTF-8 on Windows ──────────────────────────────────────────────
 # Windows cmd.exe uses cp1252 by default, which crashes on Unicode emojis
