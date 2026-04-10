@@ -34,6 +34,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Variables de entorno por defecto
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+ENV HOME=/tmp
 
 EXPOSE 8000
 
