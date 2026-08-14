@@ -1,3 +1,4 @@
+
 # ============================================================
 # BankMind API Predicción — Módulo ATM
 # Multi-stage build · Python 3.11.9
@@ -21,6 +22,11 @@ LABEL maintainer="BankMind Team"
 LABEL description="API de predicción de retiro de efectivo en cajeros automáticos"
 
 WORKDIR /app
+
+# Instalar dependencias del sistema requeridas por LightGBM/XGBoost
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libgomp1 && \
+    rm -rf /var/lib/apt/lists/*
 
 # Copiar solo el virtualenv compilado
 COPY --from=builder /opt/venv /opt/venv
